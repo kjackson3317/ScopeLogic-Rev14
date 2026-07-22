@@ -1,27 +1,27 @@
-# ScopeLogic Revision 14.3
+# ScopeLogic Revision 14.4
 
-Focused refinement of the Revision 14 application.
+Revision 14.4 refines project document metadata, internal notes, export tracking, PDF version metadata, and official GC release packaging.
 
-## Revision 14.3 changes
+## Key changes
 
-- Replaces browser alert, prompt, and confirm dialogs with branded in-app dialogs.
-- Adds project status and multi-system dropdown controls.
-- Adds document-type dropdowns for Drawings, Specifications, Addendums, Revisions, Narratives, General Bid Documents, and Contractor Checklist.
-- Adds project document uploads with browser-persistent IndexedDB file storage.
-- Rebuilds Project Documents as a Windows Explorer-style workspace with Project Documents and Previous Documents folders.
-- Adds Replace Revision workflow that moves superseded files to Previous Documents.
-- Shows RFI number below SLR number in the Clarification Matrix when applicable.
-- Rebuilds PDF table grid calculations so borders share exact coordinates and column widths match the printable area.
-- Restores standardized ScopeLogic LLC PDF headers, company mark, project metadata, revision, and standardized footer.
-- Adds contractor checklist instruction note and taller multiline editable response-reason fields.
-
-## Run locally
-
-```bash
-npm install
-npm run dev
-```
+- Project Document details now use a local editing draft and require **Save Details**.
+- Display Name, Document Type, Revision, Issue Date, Current status, and Notes persist only after Save Details.
+- Current Document is a checkbox independent of the Revision text.
+- Project Setup and all generated PDFs use **Version Date** instead of Bid Date.
+- Contractor Checklist dropdown and Reason form text is reduced to align with the document body font.
+- Export Log records actual PDF download events, not PDF generation/update events.
+- Added project-specific Internal Notes with one large scrolling text area.
+- Added **Generate All PDFs** / **Generate All PDFs for GC**.
+- Official releases download one combined PDF containing:
+  1. ScopeLogic cover page
+  2. Recommended SOW Matrix
+  3. Clarification Matrix
+  4. Formal RFI
+  5. Contractor Response Checklist
+  6. Snippet Register
+- The cover page includes ScopeLogic LLC branding, project/client, document revision, version date, and included deliverables.
+- Individual PDF generation, preview, update, and download controls remain available.
 
 ## Deploy
 
-Upload the repository contents to GitHub. Vercel will detect Next.js and run `npm run build`.
+Upload the extracted project files to the GitHub repository and commit to `main`. Vercel should redeploy automatically.

@@ -5,7 +5,7 @@ export type PdfKind = 'sow' | 'clarifications' | 'rfi' | 'checklist' | 'snippets
 export type PdfProject = {
   name: string;
   client: string;
-  bidDate: string;
+  versionDate: string;
   revision: string;
 };
 
@@ -242,7 +242,7 @@ export async function buildPdfBytes(kind: PdfKind, project: PdfProject, allIssue
     const metaValues = [
       ['Project', project.name || 'Not entered'],
       ['GC / Client', project.client || 'Not entered'],
-      ['Bid Date', project.bidDate || 'Not set'],
+      ['Version Date', project.versionDate || 'Not set'],
       ['Revision', project.revision || 'Rev 0'],
     ];
     let metaX = margin;
@@ -290,6 +290,7 @@ export async function buildPdfBytes(kind: PdfKind, project: PdfProject, allIssue
           dropdown.addOptions(['Included', 'Excluded', 'Included as Alternate', 'Clarification Required', 'Not Applicable']);
           const selected = ['Included', 'Excluded', 'Included as Alternate', 'Clarification Required', 'Not Applicable'].includes(issue.response) ? issue.response : 'Included';
           dropdown.select(selected);
+          dropdown.setFontSize(6.25);
           dropdown.addToPage(page, {
             x: cellX + 5,
             y: y - rowHeight + 6,
@@ -305,6 +306,7 @@ export async function buildPdfBytes(kind: PdfKind, project: PdfProject, allIssue
           const field = form.createTextField(`reason_${rowIndex + 1}`);
           field.enableMultiline();
           if (issue.responseReason) field.setText(safe(issue.responseReason));
+          field.setFontSize(6.25);
           field.addToPage(page, {
             x: cellX + 5,
             y: y - rowHeight + 6,
@@ -369,4 +371,56 @@ export async function buildPdfBytes(kind: PdfKind, project: PdfProject, allIssue
 
   if (form) form.updateFieldAppearances(font);
   return document.save();
+}
+
+
+export async function buildReleasePackageBytes(project: PdfProject, issues: PdfIssue[]) {
+  const output = await PDFDocument.create();
+  const font = await output.embedFont(StandardFonts.Helvetica);
+  const bold = await output.embedFont(StandardFonts.HelveticaBold);
+  const page = output.addPage([612, 792]);
+  const { width, height } = page.getSize();
+  const green = rgb(0.12, 0.2, 0.13);
+  const mediumGreen = rgb(0.2, 0.31, 0.21);
+  const lightGreen = rgb(0.93, 0.96, 0.92);
+  const muted = rgb(0.35, 0.4, 0.35);
+  const white = rgb(1, 1, 1);
+  const black = rgb(0.08, 0.1, 0.08);
+
+  page.drawRectangle({ x: 0, y: height - 120, width, height: 120, color: green });
+  page.drawRectangle({ x: 48, y: height - 82, width: 42, height: 42, borderColor: white, borderWidth: 1.5 });
+  page.drawText('SL', { x: 58, y: height - 69, size: 15, font: bold, color: white });
+  page.drawText('ScopeLogic LLC', { x: 104, y: height - 60, size: 23, font: bold, color: white });
+  page.drawText('Division 27/28 Scope Consulting', { x: 104, y: height - 82, size: 9, font, color: rgb(0.82, 0.88, 0.81) });
+
+  page.drawText('OFFICIAL DELIVERABLE RELEASE', { x: 48, y: height - 190, size: 11, font: bold, color: mediumGreen });
+  const projectFit = fitText(project.name || 'ScopeLogic Project', bold, 25, width - 96, 15);
+  page.drawText(projectFit.text, { x: 48, y: height - 228, size: projectFit.size, font: bold, color: black });
+  const clientFit = fitText(project.client || 'GC / Client not entered', font, 12, width - 96, 8);
+  page.drawText(clientFit.text, { x: 48, y: height - 255, size: clientFit.size, font, color: muted });
+
+  page.drawRectangle({ x: 48, y: height - 370, width: width - 96, height: 82, color: lightGreen, borderColor: mediumGreen, borderWidth: 0.6 });
+  page.drawText('DOCUMENT REVISION', { x: 64, y: height - 315, size: 7, font: bold, color: muted });
+  page.drawText(project.revision || 'Rev 0', { x: 64, y: height - 343, size: 18, font: bold, color: black });
+  page.drawText('VERSION DATE', { x: 310, y: height - 315, size: 7, font: bold, color: muted });
+  page.drawText(project.versionDate || 'Not set', { x: 310, y: height - 343, size: 13, font: bold, color: black });
+
+  page.drawText('Included Deliverables', { x: 48, y: height - 420, size: 12, font: bold, color: black });
+  const titles = ['Recommended SOW Matrix', 'Clarification Matrix', 'Formal RFI', 'Contractor Response Checklist', 'Snippet Register'];
+  titles.forEach((title, index) => {
+    const y = height - 452 - index * 31;
+    page.drawRectangle({ x: 50, y: y - 3, width: 10, height: 10, color: mediumGreen });
+    page.drawText(title, { x: 72, y, size: 10, font, color: black });
+  });
+  page.drawLine({ start: { x: 48, y: 62 }, end: { x: width - 48, y: 62 }, thickness: 0.5, color: mediumGreen });
+  page.drawText('Prepared by ScopeLogic LLC | Confidential', { x: 48, y: 42, size: 7, font, color: muted });
+
+  const kinds: PdfKind[] = ['sow', 'clarifications', 'rfi', 'checklist', 'snippets'];
+  for (const kind of kinds) {
+    const bytes = await buildPdfBytes(kind, project, issues);
+    const source = await PDFDocument.load(bytes);
+    const copied = await output.copyPages(source, source.getPageIndices());
+    copied.forEach((copiedPage) => output.addPage(copiedPage));
+  }
+  return output.save();
 }

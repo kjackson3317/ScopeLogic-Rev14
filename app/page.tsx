@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
-import { buildPdfBytes, type PdfKind } from './pdf-generator';
+import { buildPdfBytes, buildReleasePackageBytes, type PdfKind } from './pdf-generator';
 
 type Project = {
   id: string;
   name: string;
   client: string;
-  bidDate: string;
+  versionDate: string;
   status: string;
   systems: string[];
   revision: string;
@@ -49,7 +49,8 @@ type Doc = {
   fileType: string;
   sizeBytes: number;
 };
-type View = 'projects' | 'dashboard' | 'setup' | 'internal' | 'documents' | 'sow' | 'clarifications' | 'rfi' | 'checklist' | 'leveling' | 'snippets' | 'exports' | 'standards';
+type ExportEntry = { id: string; fileName: string; deliverable: string; downloadedAt: string; projectRevision: string };
+type View = 'projects' | 'dashboard' | 'setup' | 'internal' | 'documents' | 'notes' | 'sow' | 'clarifications' | 'rfi' | 'checklist' | 'leveling' | 'snippets' | 'exports' | 'standards';
 type DialogState =
   | { kind: 'message'; title: string; message: string; confirmLabel?: string }
   | { kind: 'confirm'; title: string; message: string; confirmLabel?: string; danger?: boolean; onConfirm: () => void | Promise<void> }
@@ -63,7 +64,7 @@ const ISSUE_STATUS_OPTIONS = ['Open', 'Under Review', 'Answered', 'Closed'];
 const DOCUMENT_TYPES = ['Drawings', 'Specifications', 'Addendums', 'Revisions', 'Narratives', 'General Bid Documents', 'Contractor Checklist'];
 const RESPONSE_OPTIONS = ['Included', 'Excluded', 'Included as Alternate', 'Clarification Required', 'Not Applicable'];
 
-const blankProject = (id: string): Project => ({ id, name: 'New ScopeLogic Project', client: '', bidDate: '', status: 'Planning', systems: [], revision: 'Rev 0', modified: 'Now' });
+const blankProject = (id: string): Project => ({ id, name: 'New ScopeLogic Project', client: '', versionDate: new Date().toISOString().slice(0, 10), status: 'Planning', systems: [], revision: 'Rev 0', modified: 'Now' });
 const blankIssue = (number: number): Issue => ({ uid: crypto.randomUUID(), id: `SLR-${String(number).padStart(3, '0')}`, system: 'Structured Cabling', customSystem: '', title: '', status: 'Open', concern: '', basis: '', reason: '', reference: '', rfi: '', resolution: '', snippet: '', sow: true, clarification: true, formalRfi: false, checklist: true, response: 'Included', responseReason: '' });
 const cloneIssue = (issue: Issue): Issue => JSON.parse(JSON.stringify(issue));
 const systemName = (issue: Issue) => (issue.system === 'Other' ? issue.customSystem || 'Other' : issue.system);
@@ -77,9 +78,10 @@ const normalizeIssues = (items: Issue[]) => {
     snippet: item.snippet ? `SNP-${String(++snippetNumber).padStart(3, '0')}` : '',
   }));
 };
-const normalizeProject = (project: Partial<Project> & { id: string }): Project => ({
+const normalizeProject = (project: Partial<Project> & { id: string } & { bidDate?: string }): Project => ({
   ...blankProject(project.id),
   ...project,
+  versionDate: project.versionDate || project.bidDate || new Date().toISOString().slice(0, 10),
   systems: Array.isArray(project.systems) ? project.systems : String(project.systems || '').split(',').map((item) => item.trim()).filter(Boolean),
   revision: project.revision || 'Rev 0',
 });
@@ -155,9 +157,11 @@ export default function Home() {
   const [pdfUrls, setPdfUrls] = useState<Partial<Record<PdfKind, string>>>({});
   const [preview, setPreview] = useState<PreviewState>(null);
   const [dialog, setDialog] = useState<DialogState | null>(null);
+  const [notesByProject, setNotesByProject] = useState<Record<string, string>>({ p1: '' });
+  const [exportsByProject, setExportsByProject] = useState<Record<string, ExportEntry[]>>({ p1: [] });
 
   useEffect(() => {
-    const raw = localStorage.getItem('scopelogic-r14-3') || localStorage.getItem('scopelogic-r14-2');
+    const raw = localStorage.getItem('scopelogic-r14-4') || localStorage.getItem('scopelogic-r14-3') || localStorage.getItem('scopelogic-r14-2');
     if (!raw) return;
     try {
       const data = JSON.parse(raw);
@@ -167,19 +171,23 @@ export default function Home() {
       setIssuesByProject(data.issuesByProject || { p1: [] });
       setDocsByProject(data.docsByProject || { p1: [] });
       setTemplates(data.templates || []);
+      setNotesByProject(data.notesByProject || { p1: '' });
+      setExportsByProject(data.exportsByProject || { p1: [] });
     } catch {
       setDialog({ kind: 'message', title: 'Saved Data Could Not Be Loaded', message: 'ScopeLogic started with a clean local workspace because the saved browser data was unreadable.' });
     }
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('scopelogic-r14-3', JSON.stringify({ projects, projectId, issuesByProject, docsByProject, templates }));
-  }, [projects, projectId, issuesByProject, docsByProject, templates]);
+    localStorage.setItem('scopelogic-r14-4', JSON.stringify({ projects, projectId, issuesByProject, docsByProject, templates, notesByProject, exportsByProject }));
+  }, [projects, projectId, issuesByProject, docsByProject, templates, notesByProject, exportsByProject]);
 
 
   const project = projects.find((item) => item.id === projectId) || projects[0];
   const issues = issuesByProject[projectId] || [];
   const docs = docsByProject[projectId] || [];
+  const internalNotes = notesByProject[projectId] || '';
+  const exportEntries = exportsByProject[projectId] || [];
   const setIssues = (change: (items: Issue[]) => Issue[]) => setIssuesByProject((current) => ({ ...current, [projectId]: normalizeIssues(change(current[projectId] || [])) }));
   const setDocs = (change: (items: Doc[]) => Doc[]) => setDocsByProject((current) => ({ ...current, [projectId]: change(current[projectId] || []) }));
   const systems = useMemo(() => ['All', ...Array.from(new Set(issues.map(systemName)))], [issues]);
@@ -252,6 +260,8 @@ export default function Home() {
     setProjects((items) => [...items, blankProject(id)]);
     setIssuesByProject((items) => ({ ...items, [id]: [] }));
     setDocsByProject((items) => ({ ...items, [id]: [] }));
+    setNotesByProject((items) => ({ ...items, [id]: '' }));
+    setExportsByProject((items) => ({ ...items, [id]: [] }));
     setProjectId(id);
     setSelectedUid('');
     setDraft(null);
@@ -269,13 +279,33 @@ export default function Home() {
     setPreview({ title, url, mode: 'pdf' });
   };
 
+  const recordDownload = (fileName: string, deliverable: string) => {
+    const entry: ExportEntry = { id: crypto.randomUUID(), fileName, deliverable, downloadedAt: new Date().toLocaleString(), projectRevision: project.revision || 'Rev 0' };
+    setExportsByProject((current) => ({ ...current, [projectId]: [entry, ...(current[projectId] || [])] }));
+  };
+
+  const downloadReleasePackage = async () => {
+    const bytes = await buildReleasePackageBytes(project, issues);
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const fileName = `${project.name.replace(/[^a-z0-9]+/gi, '_') || 'ScopeLogic'}_${project.revision.replace(/[^a-z0-9]+/gi, '_')}_Official_Release.pdf`;
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    recordDownload(fileName, 'Official GC Release Package');
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  };
+
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileNav ? 'show' : ''}`}>
-        <div className="brand"><div className="brand-mark">SL</div><div><strong>ScopeLogic</strong><span>Revision 14.3</span></div></div>
+        <div className="brand"><div className="brand-mark">SL</div><div><strong>ScopeLogic</strong><span>Revision 14.4</span></div></div>
         <button className="project-switch" onClick={() => setView('projects')}><span>Current project</span><b>{project.name}</b><small>Switch projects</small></button>
         <Nav label="PROJECT" items={[["projects", "Project Library"], ["dashboard", "Dashboard"], ["setup", "Project Setup"]]} view={view} setView={setView} />
-        <Nav label="WORKSPACE" items={[["internal", "ScopeLogic Internal Matrix"], ["documents", "Project Documents"]]} view={view} setView={setView} />
+        <Nav label="WORKSPACE" items={[["internal", "ScopeLogic Internal Matrix"], ["documents", "Project Documents"], ["notes", "Internal Notes"]]} view={view} setView={setView} />
         <Nav label="DELIVERABLES" items={navDeliverables} view={view} setView={setView} />
         <Nav label="ADMINISTRATION" items={[["exports", "Export Log"], ["standards", "ScopeLogic Standards"]]} view={view} setView={setView} />
       </aside>
@@ -283,21 +313,22 @@ export default function Home() {
         <header className="topbar">
           <button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)}>Menu</button>
           <div><span>{project.client || 'ScopeLogic project'}</span><b>{project.name}</b></div>
-          <div className="top-actions"><button className="secondary" onClick={() => setView('documents')}>Documents</button><button className="primary" onClick={() => newDraft()}>+ New SLR</button></div>
+          <div className="top-actions"><button className="secondary" onClick={downloadReleasePackage}>Generate All PDFs</button><button className="secondary" onClick={() => setView('documents')}>Documents</button><button className="primary" onClick={() => newDraft()}>+ New SLR</button></div>
         </header>
         <div className="page">
           {view === 'projects' && <ProjectLibrary projects={projects} active={projectId} open={(id) => { setProjectId(id); setSelectedUid(''); setDraft(null); setView('dashboard'); }} add={addProject} />}
-          {view === 'dashboard' && <Dashboard project={project} issues={issues} docs={docs} go={setView} />}
+          {view === 'dashboard' && <Dashboard project={project} issues={issues} docs={docs} go={setView} generateAll={downloadReleasePackage} />}
           {view === 'setup' && <ProjectSetup project={project} save={(key, value) => setProjects((items) => items.map((item) => item.id === projectId ? { ...item, [key]: value, modified: 'Now' } : item))} />}
           {view === 'internal' && <InternalMatrix issues={filtered} allCount={issues.length} draft={draft} selectedUid={selectedUid} edit={editIssue} setDraft={setDraft} submit={submit} remove={deleteEntry} newDraft={newDraft} saveTemplate={saveTemplate} templates={templates} deleteTemplate={requestDeleteTemplate} search={search} setSearch={setSearch} systems={systems} systemFilter={systemFilter} setSystemFilter={setSystemFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} tab={tab} setTab={setTab} />}
           {view === 'documents' && <Documents projectId={projectId} docs={docs} setDocs={setDocs} openPreview={setPreview} confirmAction={confirmAction} requestInput={requestInput} message={message} />}
-          {view === 'sow' && <Deliverable title="Recommended SOW Matrix" eyebrow="Primary Flagship Deliverable" description="Uses submitted Internal Matrix entries assigned to Recommended SOW." rows={issues.filter((i) => i.sow)} columns={['SLR', 'System', 'Scope Item', 'Scope Concern', 'Recommended Bid Basis', 'Reference']} values={(i) => [i.id, systemName(i), i.title, i.concern, i.basis, i.reference]} update={() => updatePdf('sow', 'Recommended SOW Matrix')} url={pdfUrls.sow} preview={(url) => setPreview({ title: 'Recommended SOW Matrix', url, mode: 'pdf' })} />}
-          {view === 'clarifications' && <Deliverable title="Clarification Matrix" eyebrow="GC Working Document" description="When an SLR is also a Formal RFI, its RFI number appears directly below the SLR number." rows={issues.filter((i) => i.clarification)} columns={['SLR / RFI', 'System', 'Question / Issue', 'Recommended Bid Basis', 'Resolution', 'Status', 'Reference']} values={(i) => [[i.id, i.rfi].filter(Boolean).join('\n'), systemName(i), i.concern, i.basis, i.resolution, i.status, i.reference]} update={() => updatePdf('clarifications', 'Clarification Matrix')} url={pdfUrls.clarifications} preview={(url) => setPreview({ title: 'Clarification Matrix', url, mode: 'pdf' })} />}
-          {view === 'rfi' && <Deliverable title="Formal RFI" eyebrow="A/E Deliverable" description="RFI numbers are generated automatically from submitted entries assigned to Formal RFI." rows={issues.filter((i) => i.formalRfi)} columns={['RFI No.', 'System', 'Question', 'Answer']} values={(i) => [i.rfi, systemName(i), i.concern, i.resolution]} update={() => updatePdf('rfi', 'Formal RFI')} url={pdfUrls.rfi} preview={(url) => setPreview({ title: 'Formal RFI', url, mode: 'pdf' })} />}
-          {view === 'checklist' && <Deliverable title="Contractor Response Checklist" eyebrow="Editable PDF" description="Every response other than Included requires a written reason. The generated PDF includes editable dropdown and multiline reason fields." rows={issues.filter((i) => i.checklist)} columns={['SLR', 'System', 'Scope Item', 'Response', 'Reason']} values={(i) => [i.id, systemName(i), i.title, i.response, i.responseReason]} update={() => updatePdf('checklist', 'Contractor Response Checklist')} url={pdfUrls.checklist} preview={(url) => setPreview({ title: 'Contractor Response Checklist', url, mode: 'pdf' })} />}
+          {view === 'sow' && <Deliverable title="Recommended SOW Matrix" eyebrow="Primary Flagship Deliverable" description="Uses submitted Internal Matrix entries assigned to Recommended SOW." rows={issues.filter((i) => i.sow)} columns={['SLR', 'System', 'Scope Item', 'Scope Concern', 'Recommended Bid Basis', 'Reference']} values={(i) => [i.id, systemName(i), i.title, i.concern, i.basis, i.reference]} update={() => updatePdf('sow', 'Recommended SOW Matrix')} url={pdfUrls.sow} onDownload={() => recordDownload('Recommended_SOW_Matrix.pdf', 'Recommended SOW Matrix')} preview={(url) => setPreview({ title: 'Recommended SOW Matrix', url, mode: 'pdf' })} />}
+          {view === 'clarifications' && <Deliverable title="Clarification Matrix" eyebrow="GC Working Document" description="When an SLR is also a Formal RFI, its RFI number appears directly below the SLR number." rows={issues.filter((i) => i.clarification)} columns={['SLR / RFI', 'System', 'Question / Issue', 'Recommended Bid Basis', 'Resolution', 'Status', 'Reference']} values={(i) => [[i.id, i.rfi].filter(Boolean).join('\n'), systemName(i), i.concern, i.basis, i.resolution, i.status, i.reference]} update={() => updatePdf('clarifications', 'Clarification Matrix')} url={pdfUrls.clarifications} onDownload={() => recordDownload('Clarification_Matrix.pdf', 'Clarification Matrix')} preview={(url) => setPreview({ title: 'Clarification Matrix', url, mode: 'pdf' })} />}
+          {view === 'rfi' && <Deliverable title="Formal RFI" eyebrow="A/E Deliverable" description="RFI numbers are generated automatically from submitted entries assigned to Formal RFI." rows={issues.filter((i) => i.formalRfi)} columns={['RFI No.', 'System', 'Question', 'Answer']} values={(i) => [i.rfi, systemName(i), i.concern, i.resolution]} update={() => updatePdf('rfi', 'Formal RFI')} url={pdfUrls.rfi} onDownload={() => recordDownload('Formal_RFI.pdf', 'Formal RFI')} preview={(url) => setPreview({ title: 'Formal RFI', url, mode: 'pdf' })} />}
+          {view === 'checklist' && <Deliverable title="Contractor Response Checklist" eyebrow="Editable PDF" description="Every response other than Included requires a written reason. The generated PDF includes editable dropdown and multiline reason fields." rows={issues.filter((i) => i.checklist)} columns={['SLR', 'System', 'Scope Item', 'Response', 'Reason']} values={(i) => [i.id, systemName(i), i.title, i.response, i.responseReason]} update={() => updatePdf('checklist', 'Contractor Response Checklist')} url={pdfUrls.checklist} onDownload={() => recordDownload('Contractor_Response_Checklist.pdf', 'Contractor Response Checklist')} preview={(url) => setPreview({ title: 'Contractor Response Checklist', url, mode: 'pdf' })} />}
           {view === 'leveling' && <BidLeveling />}
-          {view === 'snippets' && <Deliverable title="Snippet Register" eyebrow="Supporting Reference Document" description="Snippet numbers are generated automatically when an SLR is marked as having a snippet." rows={issues.filter((i) => i.snippet)} columns={['Snippet No.', 'SLR', 'System', 'Reference', 'Caption']} values={(i) => [i.snippet, i.id, systemName(i), i.reference, i.title]} update={() => updatePdf('snippets', 'Snippet Register')} url={pdfUrls.snippets} preview={(url) => setPreview({ title: 'Snippet Register', url, mode: 'pdf' })} />}
-          {view === 'exports' && <SimplePage title="Export Log" text="PDFs are generated from current submitted project data when Generate PDF or Update PDF is selected." />}
+          {view === 'snippets' && <Deliverable title="Snippet Register" eyebrow="Supporting Reference Document" description="Snippet numbers are generated automatically when an SLR is marked as having a snippet." rows={issues.filter((i) => i.snippet)} columns={['Snippet No.', 'SLR', 'System', 'Reference', 'Caption']} values={(i) => [i.snippet, i.id, systemName(i), i.reference, i.title]} update={() => updatePdf('snippets', 'Snippet Register')} url={pdfUrls.snippets} onDownload={() => recordDownload('Snippet_Register.pdf', 'Snippet Register')} preview={(url) => setPreview({ title: 'Snippet Register', url, mode: 'pdf' })} />}
+          {view === 'notes' && <InternalNotes value={internalNotes} onChange={(value) => setNotesByProject((current) => ({ ...current, [projectId]: value }))} />}
+          {view === 'exports' && <ExportLog entries={exportEntries} />}
           {view === 'standards' && <SimplePage title="ScopeLogic Standards" text="Projects begin blank, templates are global, entries require submission, numbering is automatic, and deliverables are generated from submitted records." />}
         </div>
       </main>
@@ -352,6 +383,7 @@ function Documents({ projectId, docs, setDocs, openPreview, confirmAction, reque
   const uploadRef = useRef<HTMLInputElement>(null);
   const replaceRef = useRef<HTMLInputElement>(null);
   const selected = docs.find((doc) => doc.id === selectedId);
+  const [detailsDraft, setDetailsDraft] = useState<Doc | null>(null);
   const visibleDocs = docs.filter((doc) => folder === 'current' ? doc.current : !doc.current);
 
   useEffect(() => {
@@ -376,6 +408,7 @@ function Documents({ projectId, docs, setDocs, openPreview, confirmAction, reque
   useEffect(() => {
     if (selected && ((folder === 'current' && !selected.current) || (folder === 'previous' && selected.current))) setSelectedId('');
   }, [folder, selected]);
+  useEffect(() => { setDetailsDraft(selected ? { ...selected } : null); }, [selectedId, selected?.id]);
 
   const fileKey = (id: string) => `${projectId}:${id}`;
   const uploadFiles = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -386,7 +419,7 @@ function Documents({ projectId, docs, setDocs, openPreview, confirmAction, reque
     for (const file of files) {
       const id = crypto.randomUUID();
       await storeFile(fileKey(id), file);
-      additions.push({ id, type: uploadType, name: file.name.replace(/\.[^.]+$/, ''), revision: 'Current', date: new Date().toISOString().slice(0, 10), current: true, notes: '', fileName: file.name, fileType: file.type || 'application/octet-stream', sizeBytes: file.size });
+      additions.push({ id, type: uploadType, name: file.name.replace(/\.[^.]+$/, ''), revision: 'Revision 0', date: new Date().toISOString().slice(0, 10), current: true, notes: '', fileName: file.name, fileType: file.type || 'application/octet-stream', sizeBytes: file.size });
     }
     setDocs((items) => [...items, ...additions]);
     setFolder('current');
@@ -428,7 +461,12 @@ function Documents({ projectId, docs, setDocs, openPreview, confirmAction, reque
     if (selected) openDocument(selected);
   };
 
-  const patch = (key: keyof Doc, value: string) => selected && setDocs((items) => items.map((doc) => doc.id === selected.id ? { ...doc, [key]: value } : doc));
+  const patch = (key: keyof Doc, value: string | boolean) => setDetailsDraft((current) => current ? { ...current, [key]: value } : current);
+  const saveDetails = () => {
+    if (!detailsDraft) return;
+    setDocs((items) => items.map((doc) => doc.id === detailsDraft.id ? detailsDraft : doc));
+    message('Document Details Saved', 'The display name, document type, revision, current status, issue date, and notes were saved.');
+  };
 
   return <>
     <PageHead eyebrow="Current Project" title="Project Documents" description="Current documents remain at the project root. Superseded revisions are retained in the Previous Documents folder." action={<div className="document-upload-controls"><SelectField label="Document Type" value={uploadType} options={DOCUMENT_TYPES} onChange={setUploadType} compact /><button className="primary" onClick={() => uploadRef.current?.click()}>Upload Documents</button><input ref={uploadRef} hidden type="file" multiple accept=".pdf,.dwg,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.tif,.tiff" onChange={uploadFiles} /></div>} />
@@ -436,8 +474,8 @@ function Documents({ projectId, docs, setDocs, openPreview, confirmAction, reque
       <aside className="folder-tree"><div className="folder-tree-title">Folders</div><button className={folder === 'current' ? 'active' : ''} onClick={() => setFolder('current')}><span className="folder-icon">P</span><div><b>Project Documents</b><small>{docs.filter((doc) => doc.current).length} current files</small></div></button><button className={folder === 'previous' ? 'active nested' : 'nested'} onClick={() => setFolder('previous')}><span className="folder-icon">F</span><div><b>Previous Documents</b><small>{docs.filter((doc) => !doc.current).length} prior files</small></div></button></aside>
       <section className="file-explorer">
         <div className="explorer-toolbar"><div><b>{folder === 'current' ? 'Project Documents' : 'Previous Documents'}</b><span>{visibleDocs.length} item{visibleDocs.length === 1 ? '' : 's'}</span></div><div className="button-row"><button className="secondary" disabled={!selected} onClick={openSelected}>Open / Preview</button><button className="secondary" disabled={!selected?.current} onClick={() => replaceRef.current?.click()}>Replace Revision</button><input ref={replaceRef} hidden type="file" accept=".pdf,.dwg,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.tif,.tiff" onChange={replaceFile} />{selected && fileUrls[selected.id] ? <a className="secondary link-button" href={fileUrls[selected.id]} download={selected.fileName}>Download</a> : <button className="secondary" disabled>Download</button>}<button className="danger-button" disabled={!selected} onClick={deleteSelected}>Delete</button></div></div>
-        <div className="file-table"><div className="file-row file-head"><span>Name</span><span>Type</span><span>Revision</span><span>Date</span><span>Size</span></div>{visibleDocs.map((doc) => <button className={`file-row ${selectedId === doc.id ? 'selected' : ''}`} key={doc.id} onClick={() => setSelectedId(doc.id)} onDoubleClick={() => openDocument(doc)}><span className="file-name"><i>{documentIcon(doc)}</i><b>{doc.fileName}</b></span><span>{doc.type}</span><span>{doc.revision}</span><span>{doc.date}</span><span>{formatBytes(doc.sizeBytes)}</span></button>)}{!visibleDocs.length && <div className="empty-folder"><b>{folder === 'current' ? 'No current project documents' : 'No previous documents'}</b><p>{folder === 'current' ? 'Choose a document type and upload one or more files.' : 'Previous revisions appear here after Replace Revision is used.'}</p></div>}</div>
-        {selected && <div className="file-properties"><div className="properties-title"><div><span>{selected.current ? 'Current document' : 'Previous document'}</span><h2>{selected.fileName}</h2></div></div><div className="editor-grid"><Field label="Display Name" value={selected.name} onChange={(value) => patch('name', value)} /><SelectField label="Document Type" value={selected.type} options={DOCUMENT_TYPES} onChange={(value) => patch('type', value)} /><Field label="Revision" value={selected.revision} onChange={(value) => patch('revision', value)} /><Field label="Issue Date" type="date" value={selected.date} onChange={(value) => patch('date', value)} /></div><TextArea label="Notes" value={selected.notes} onChange={(value) => patch('notes', value)} /></div>}
+        <div className="file-table"><div className="file-row file-head"><span>Name</span><span>Type</span><span>Revision</span><span>Date</span><span>Size</span></div>{visibleDocs.map((doc) => <button className={`file-row ${selectedId === doc.id ? 'selected' : ''}`} key={doc.id} onClick={() => setSelectedId(doc.id)} onDoubleClick={() => openDocument(doc)}><span className="file-name"><i>{documentIcon(doc)}</i><b>{doc.name || doc.fileName}</b></span><span>{doc.type}</span><span>{doc.revision}</span><span>{doc.date}</span><span>{formatBytes(doc.sizeBytes)}</span></button>)}{!visibleDocs.length && <div className="empty-folder"><b>{folder === 'current' ? 'No current project documents' : 'No previous documents'}</b><p>{folder === 'current' ? 'Choose a document type and upload one or more files.' : 'Previous revisions appear here after Replace Revision is used.'}</p></div>}</div>
+        {detailsDraft && <div className="file-properties"><div className="properties-title"><div><span>{detailsDraft.current ? 'Current document' : 'Previous document'}</span><h2>{detailsDraft.fileName}</h2></div><button className="primary" onClick={saveDetails}>Save Details</button></div><div className="editor-grid"><Field label="Display Name" value={detailsDraft.name} onChange={(value) => patch('name', value)} /><SelectField label="Document Type" value={detailsDraft.type} options={DOCUMENT_TYPES} onChange={(value) => patch('type', value)} /><Field label="Revision" value={detailsDraft.revision} onChange={(value) => patch('revision', value)} /><Field label="Issue Date" type="date" value={detailsDraft.date} onChange={(value) => patch('date', value)} /><label className="field checkbox-field"><span>Current Document</span><div><input type="checkbox" checked={detailsDraft.current} onChange={(event) => patch('current', event.target.checked)} /><b>{detailsDraft.current ? 'Current' : 'Previous'}</b></div></label></div><TextArea label="Notes" value={detailsDraft.notes} onChange={(value) => patch('notes', value)} /></div>}
       </section>
     </div>
   </>;
@@ -463,12 +501,12 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function Deliverable({ title, eyebrow, description, rows, columns, values, update, url, preview }: { title: string; eyebrow: string; description: string; rows: Issue[]; columns: string[]; values: (issue: Issue) => string[]; update: () => void; url?: string; preview: (url: string) => void }) {
-  return <><PageHead eyebrow={eyebrow} title={title} description={description} action={<div className="button-row"><button className="secondary" onClick={update}>{url ? 'Update PDF' : 'Generate PDF'}</button><button className="secondary" disabled={!url} onClick={() => url && preview(url)}>Preview</button>{url ? <a className="primary link-button" href={url} download={`${title.replaceAll(' ', '_')}.pdf`}>Download PDF</a> : <button className="primary" disabled>Download PDF</button>}</div>} /><div className="sync-note">PDF status: <b>{url ? 'Generated from current submitted entries' : 'Not generated'}</b>. Select Update PDF after changing deliverable assignments or submitted entries.</div><div className="matrix-export"><div className="matrix-table"><div className="matrix-row head" style={{ gridTemplateColumns: `repeat(${columns.length},minmax(120px,1fr))` }}>{columns.map((column) => <b key={column}>{column}</b>)}</div>{rows.length ? rows.map((issue) => <div className="matrix-row" key={issue.uid} style={{ gridTemplateColumns: `repeat(${columns.length},minmax(120px,1fr))` }}>{values(issue).map((value, index) => <span key={index}>{value || '-'}</span>)}</div>) : <div className="empty-state"><b>No submitted entries assigned</b><p>Assign an SLR to this deliverable and submit it from the Internal Matrix.</p></div>}</div></div></>;
+function Deliverable({ title, eyebrow, description, rows, columns, values, update, url, preview, onDownload }: { title: string; eyebrow: string; description: string; rows: Issue[]; columns: string[]; values: (issue: Issue) => string[]; update: () => void; url?: string; preview: (url: string) => void; onDownload: () => void }) {
+  return <><PageHead eyebrow={eyebrow} title={title} description={description} action={<div className="button-row"><button className="secondary" onClick={update}>{url ? 'Update PDF' : 'Generate PDF'}</button><button className="secondary" disabled={!url} onClick={() => url && preview(url)}>Preview</button>{url ? <a className="primary link-button" href={url} download={`${title.replaceAll(' ', '_')}.pdf`} onClick={onDownload}>Download PDF</a> : <button className="primary" disabled>Download PDF</button>}</div>} /><div className="sync-note">PDF status: <b>{url ? 'Generated from current submitted entries' : 'Not generated'}</b>. Select Update PDF after changing deliverable assignments or submitted entries.</div><div className="matrix-export"><div className="matrix-table"><div className="matrix-row head" style={{ gridTemplateColumns: `repeat(${columns.length},minmax(120px,1fr))` }}>{columns.map((column) => <b key={column}>{column}</b>)}</div>{rows.length ? rows.map((issue) => <div className="matrix-row" key={issue.uid} style={{ gridTemplateColumns: `repeat(${columns.length},minmax(120px,1fr))` }}>{values(issue).map((value, index) => <span key={index}>{value || '-'}</span>)}</div>) : <div className="empty-state"><b>No submitted entries assigned</b><p>Assign an SLR to this deliverable and submit it from the Internal Matrix.</p></div>}</div></div></>;
 }
 
 function ProjectSetup({ project, save }: { project: Project; save: (key: keyof Project, value: string | string[]) => void }) {
-  return <><PageHead eyebrow="Project" title="Project Setup" description="Core project information and project-level system selection." /><div className="form-card"><Field label="Project Name" value={project.name} onChange={(value) => save('name', value)} /><Field label="GC / Client" value={project.client} onChange={(value) => save('client', value)} /><Field label="Bid Date" type="date" value={project.bidDate} onChange={(value) => save('bidDate', value)} /><Field label="Revision" value={project.revision} onChange={(value) => save('revision', value)} /><SelectField label="Status" value={project.status} options={PROJECT_STATUS_OPTIONS} onChange={(value) => save('status', value)} /><MultiSelectField label="Systems" values={project.systems} options={SYSTEM_OPTIONS} onChange={(value) => save('systems', value)} /></div></>;
+  return <><PageHead eyebrow="Project" title="Project Setup" description="Core project information and project-level system selection." /><div className="form-card"><Field label="Project Name" value={project.name} onChange={(value) => save('name', value)} /><Field label="GC / Client" value={project.client} onChange={(value) => save('client', value)} /><Field label="Version Date" type="date" value={project.versionDate} onChange={(value) => save('versionDate', value)} /><Field label="Revision" value={project.revision} onChange={(value) => save('revision', value)} /><SelectField label="Status" value={project.status} options={PROJECT_STATUS_OPTIONS} onChange={(value) => save('status', value)} /><MultiSelectField label="Systems" values={project.systems} options={SYSTEM_OPTIONS} onChange={(value) => save('systems', value)} /></div></>;
 }
 
 function MultiSelectField({ label, values, options, onChange }: { label: string; values: string[]; options: string[]; onChange: (values: string[]) => void }) {
@@ -493,9 +531,18 @@ function PreviewModal({ preview, close }: { preview: NonNullable<PreviewState>; 
   return <div className="modal"><div className="modal-card"><div className="modal-head"><b>{preview.title}</b><button onClick={close}>Close</button></div>{preview.mode === 'image' ? <div className="image-preview"><img src={preview.url} alt={preview.title} /></div> : <iframe src={preview.url} title={preview.title} />}</div></div>;
 }
 
+
+function InternalNotes({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return <><PageHead eyebrow="Internal Workspace" title="Internal Notes" description="Private project notes are stored with this project and are not included in client deliverables." /><div className="notes-page"><textarea value={value} onChange={(event) => onChange(event.target.value)} placeholder="Jot down project thoughts, follow-up items, coordination notes, and internal reminders..." /></div></>;
+}
+
+function ExportLog({ entries }: { entries: ExportEntry[] }) {
+  return <><PageHead eyebrow="Administration" title="Export Log" description="Tracks PDF downloads and official release-package downloads. Generating or updating a PDF does not create a log entry." /><div className="matrix-export"><div className="matrix-table"><div className="matrix-row head" style={{ gridTemplateColumns: '1.4fr 1fr .8fr 1fr' }}><b>Downloaded File</b><b>Deliverable</b><b>Revision</b><b>Downloaded</b></div>{entries.length ? entries.map((entry) => <div className="matrix-row" key={entry.id} style={{ gridTemplateColumns: '1.4fr 1fr .8fr 1fr' }}><span>{entry.fileName}</span><span>{entry.deliverable}</span><span>{entry.projectRevision}</span><span>{entry.downloadedAt}</span></div>) : <div className="empty-state"><b>No downloads recorded</b><p>Entries appear here when a PDF or official release package is downloaded.</p></div>}</div></div></>;
+}
+
 function BidLeveling() { return <><PageHead eyebrow="Optional Post-Bid Analysis" title="Bid Leveling Summary" description="Bidder-level executive evaluation remains separate from the Contractor Response Checklist." /><div className="empty-state large"><b>Bid leveling workspace retained.</b><p>This section remains available for bidder strengths, weaknesses, risk, commercial concerns, and recommendation.</p></div></>; }
 function ProjectLibrary({ projects, active, open, add }: { projects: Project[]; active: string; open: (id: string) => void; add: () => void }) { return <><PageHead eyebrow="ScopeLogic" title="Project Library" description="Every new project begins blank at SLR-001." action={<button className="primary" onClick={add}>+ New Project</button>} /><div className="project-grid">{projects.map((project) => <button key={project.id} className={`project-card ${project.id === active ? 'selected' : ''}`} onClick={() => open(project.id)}><span className="status">{project.status}</span><h3>{project.name}</h3><p>{project.client || 'Client not entered'}</p><b>Open project</b></button>)}</div></>; }
-function Dashboard({ project, issues, docs, go }: { project: Project; issues: Issue[]; docs: Doc[]; go: (view: View) => void }) { return <><PageHead eyebrow="Project Dashboard" title={project.name} description="Submitted scope issues and current project documents." /><div className="metrics"><Metric n={issues.length} label="Submitted SLRs" /><Metric n={issues.filter((issue) => issue.status === 'Open' || issue.status === 'Under Review').length} label="Open Issues" /><Metric n={issues.filter((issue) => issue.formalRfi).length} label="Formal RFIs" /><Metric n={docs.filter((doc) => doc.current).length} label="Current Documents" /></div><button className="primary" onClick={() => go('internal')}>Open Internal Matrix</button></>; }
+function Dashboard({ project, issues, docs, go, generateAll }: { project: Project; issues: Issue[]; docs: Doc[]; go: (view: View) => void; generateAll: () => void }) { return <><PageHead eyebrow="Project Dashboard" title={project.name} description="Submitted scope issues and current project documents." /><div className="metrics"><Metric n={issues.length} label="Submitted SLRs" /><Metric n={issues.filter((issue) => issue.status === 'Open' || issue.status === 'Under Review').length} label="Open Issues" /><Metric n={issues.filter((issue) => issue.formalRfi).length} label="Formal RFIs" /><Metric n={docs.filter((doc) => doc.current).length} label="Current Documents" /></div><div className="button-row"><button className="primary" onClick={() => go('internal')}>Open Internal Matrix</button><button className="secondary" onClick={generateAll}>Generate All PDFs for GC</button></div></>; }
 function Nav({ label, items, view, setView }: { label: string; items: [View, string][]; view: View; setView: (view: View) => void }) { return <div className="nav-group"><span>{label}</span>{items.map(([id, name]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}>{name}</button>)}</div>; }
 function SimplePage({ title, text }: { title: string; text: string }) { return <><PageHead eyebrow="Internal" title={title} description={text} /><div className="empty-state large"><b>{title}</b></div></>; }
 function PageHead({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) { return <div className="page-head"><div><span>{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>; }
