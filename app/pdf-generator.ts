@@ -1,4 +1,4 @@
-import { PDFDocument, StandardFonts, rgb, type PDFPage, type PDFFont } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb, type PDFPage, type PDFFont, type PDFImage } from 'pdf-lib';
 
 export type PdfKind = 'sow' | 'clarifications' | 'rfi' | 'checklist' | 'snippets';
 
@@ -17,6 +17,7 @@ export type PdfIssue = {
   title: string;
   status: string;
   concern: string;
+  rfiQuestion: string;
   basis: string;
   reference: string;
   rfi: string;
@@ -36,6 +37,45 @@ type PdfConfig = {
   ratios: number[];
   values: (issue: PdfIssue) => string[];
 };
+
+type BrandAssets = {
+  full: Uint8Array;
+  mark: Uint8Array;
+  wordmark: Uint8Array;
+};
+
+type EmbeddedBrand = {
+  full: PDFImage;
+  mark: PDFImage;
+  wordmark: PDFImage;
+};
+
+let brandAssetsPromise: Promise<BrandAssets> | null = null;
+
+async function fetchBytes(path: string) {
+  const response = await fetch(path);
+  if (!response.ok) throw new Error(`Could not load brand asset: ${path}`);
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+async function loadBrandAssets(): Promise<BrandAssets> {
+  if (!brandAssetsPromise) {
+    brandAssetsPromise = Promise.all([
+      fetchBytes('/brand/scopelogic-logo-full.png'),
+      fetchBytes('/brand/scopelogic-logo-mark.png'),
+      fetchBytes('/brand/scopelogic-wordmark.png'),
+    ]).then(([full, mark, wordmark]) => ({ full, mark, wordmark }));
+  }
+  return brandAssetsPromise;
+}
+
+async function embedBrand(document: PDFDocument, assets: BrandAssets): Promise<EmbeddedBrand> {
+  return {
+    full: await document.embedPng(assets.full),
+    mark: await document.embedPng(assets.mark),
+    wordmark: await document.embedPng(assets.wordmark),
+  };
+}
 
 const systemName = (issue: PdfIssue) =>
   issue.system === 'Other' ? issue.customSystem || 'Other' : issue.system;
@@ -70,7 +110,7 @@ function configFor(kind: PdfKind): PdfConfig {
       title: 'Formal RFI',
       headers: ['RFI No.', 'System', 'Question', 'Answer'],
       ratios: [0.13, 0.18, 0.43, 0.26],
-      values: (i) => [i.rfi, systemName(i), i.concern, i.resolution],
+      values: (i) => [i.rfi, systemName(i), i.rfiQuestion || i.concern, i.resolution],
     };
   }
   if (kind === 'checklist') {
@@ -172,23 +212,29 @@ function fitText(text: string, font: PDFFont, preferred: number, maxWidth: numbe
   return { text: value, size };
 }
 
-export async function buildPdfBytes(kind: PdfKind, project: PdfProject, allIssues: PdfIssue[]) {
+async function appendDeliverable(
+  document: PDFDocument,
+  kind: PdfKind,
+  project: PdfProject,
+  allIssues: PdfIssue[],
+  brand: EmbeddedBrand,
+  formPrefix: string,
+) {
   const legalLandscape: [number, number] = [1008, 612];
   const legalPortrait: [number, number] = [612, 1008];
   const landscape = kind !== 'rfi';
   const pageSize = landscape ? legalLandscape : legalPortrait;
-  const document = await PDFDocument.create();
   const font = await document.embedFont(StandardFonts.Helvetica);
   const bold = await document.embedFont(StandardFonts.HelveticaBold);
   const config = configFor(kind);
   const rows = rowsFor(kind, allIssues);
   const form = kind === 'checklist' ? document.getForm() : null;
 
-  const darkGreen = rgb(0.12, 0.2, 0.13);
-  const mediumGreen = rgb(0.2, 0.31, 0.21);
-  const lightGreen = rgb(0.93, 0.96, 0.92);
-  const alternate = rgb(0.975, 0.985, 0.972);
-  const border = rgb(0.68, 0.73, 0.67);
+  const darkGreen = rgb(0.14, 0.19, 0.09);
+  const mediumGreen = rgb(0.28, 0.36, 0.14);
+  const lightGreen = rgb(0.95, 0.97, 0.93);
+  const alternate = rgb(0.982, 0.987, 0.976);
+  const border = rgb(0.64, 0.68, 0.59);
   const muted = rgb(0.35, 0.4, 0.35);
   const white = rgb(1, 1, 1);
   const black = rgb(0.08, 0.1, 0.08);
@@ -198,7 +244,7 @@ export async function buildPdfBytes(kind: PdfKind, project: PdfProject, allIssue
   const footerLimit = 30;
   const fontSize = 7;
   const lineHeight = 9;
-  const headerBarHeight = 58;
+  const headerBarHeight = 64;
   const metaHeight = 42;
   const instructionHeight = kind === 'checklist' ? 28 : 0;
   const tableHeaderHeight = 22;
@@ -209,6 +255,7 @@ export async function buildPdfBytes(kind: PdfKind, project: PdfProject, allIssue
 
   let page: PDFPage;
   let y = 0;
+  const createdPages: PDFPage[] = [];
 
   const drawHeaderGrid = (target: PDFPage, topY: number) => {
     target.drawRectangle({ x: margin, y: topY - tableHeaderHeight, width: contentWidth, height: tableHeaderHeight, color: mediumGreen });
@@ -223,19 +270,22 @@ export async function buildPdfBytes(kind: PdfKind, project: PdfProject, allIssue
 
   const addPage = () => {
     page = document.addPage(pageSize);
+    createdPages.push(page);
     const { width, height } = page.getSize();
 
-    page.drawRectangle({ x: 0, y: height - headerBarHeight, width, height: headerBarHeight, color: darkGreen });
-    page.drawRectangle({ x: margin, y: height - 43, width: 30, height: 30, borderColor: white, borderWidth: 1 });
-    page.drawText('SL', { x: margin + 7.5, y: height - 34, size: 11, font: bold, color: white });
-    page.drawText('ScopeLogic LLC', { x: margin + 40, y: height - 25, size: 15, font: bold, color: white });
-    page.drawText('Division 27/28 Scope Consulting', { x: margin + 40, y: height - 39, size: 7, font, color: rgb(0.82, 0.88, 0.81) });
+    page.drawRectangle({ x: 0, y: height - headerBarHeight, width, height: headerBarHeight, color: white });
+    const markSize = brand.mark.scaleToFit(44, 44);
+    page.drawImage(brand.mark, { x: margin, y: height - 55, width: markSize.width, height: markSize.height });
+    const wordSize = brand.wordmark.scaleToFit(190, 28);
+    page.drawImage(brand.wordmark, { x: margin + 52, y: height - 43, width: wordSize.width, height: wordSize.height });
+    page.drawText('DIVISION 27/28 SCOPE CONSULTING', { x: margin + 54, y: height - 55, size: 5.5, font: bold, color: mediumGreen });
 
     const titleFit = fitText(config.title, bold, 14, width * 0.46, 9);
     const titleWidth = bold.widthOfTextAtSize(titleFit.text, titleFit.size);
-    page.drawText(titleFit.text, { x: width - margin - titleWidth, y: height - 32, size: titleFit.size, font: bold, color: white });
+    page.drawText(titleFit.text, { x: width - margin - titleWidth, y: height - 35, size: titleFit.size, font: bold, color: black });
+    page.drawLine({ start: { x: margin, y: height - headerBarHeight + 2 }, end: { x: width - margin, y: height - headerBarHeight + 2 }, thickness: 2, color: darkGreen });
 
-    const metaTop = height - headerBarHeight;
+    const metaTop = height - headerBarHeight - 4;
     page.drawRectangle({ x: margin, y: metaTop - metaHeight, width: contentWidth, height: metaHeight, color: lightGreen, borderColor: border, borderWidth: 0.5 });
     const metaRatios = [0.34, 0.28, 0.19, 0.19];
     const metaWidths = exactWidths(metaRatios, contentWidth);
@@ -286,11 +336,11 @@ export async function buildPdfBytes(kind: PdfKind, project: PdfProject, allIssue
       const isChecklistField = kind === 'checklist' && (columnIndex === 3 || columnIndex === 4);
       if (isChecklistField && firstFragment && form) {
         if (columnIndex === 3) {
-          const dropdown = form.createDropdown(`response_${rowIndex + 1}`);
-          dropdown.addOptions(['Included', 'Excluded', 'Included as Alternate', 'Clarification Required', 'Not Applicable']);
-          const selected = ['Included', 'Excluded', 'Included as Alternate', 'Clarification Required', 'Not Applicable'].includes(issue.response) ? issue.response : 'Included';
-          dropdown.select(selected);
-          dropdown.setFontSize(6.25);
+          const dropdown = form.createDropdown(`${formPrefix}_response_${rowIndex + 1}`);
+          const options = ['Included', 'Excluded', 'Included as Alternate', 'Clarification Required', 'Not Applicable'];
+          dropdown.addOptions(options);
+          dropdown.select(options.includes(issue.response) ? issue.response : 'Included');
+          dropdown.setFontSize(6);
           dropdown.addToPage(page, {
             x: cellX + 5,
             y: y - rowHeight + 6,
@@ -299,14 +349,13 @@ export async function buildPdfBytes(kind: PdfKind, project: PdfProject, allIssue
             borderWidth: 0.6,
             borderColor: mediumGreen,
             backgroundColor: white,
-            font,
             textColor: black,
           });
         } else {
-          const field = form.createTextField(`reason_${rowIndex + 1}`);
+          const field = form.createTextField(`${formPrefix}_reason_${rowIndex + 1}`);
           field.enableMultiline();
           if (issue.responseReason) field.setText(safe(issue.responseReason));
-          field.setFontSize(6.25);
+          field.setFontSize(6);
           field.addToPage(page, {
             x: cellX + 5,
             y: y - rowHeight + 6,
@@ -315,7 +364,6 @@ export async function buildPdfBytes(kind: PdfKind, project: PdfProject, allIssue
             borderWidth: 0.6,
             borderColor: mediumGreen,
             backgroundColor: white,
-            font,
             textColor: black,
           });
         }
@@ -361,66 +409,69 @@ export async function buildPdfBytes(kind: PdfKind, project: PdfProject, allIssue
     page.drawText('No submitted entries are assigned to this deliverable.', { x: margin + 8, y: y - 25, size: 8, font, color: muted });
   }
 
-  const pages = document.getPages();
-  pages.forEach((target, index) => {
-    const footerText = `ScopeLogic LLC | Confidential | ${safe(project.name)} | ${config.title} | Page ${index + 1} of ${pages.length}`;
+  createdPages.forEach((target, index) => {
+    const footerText = `ScopeLogic LLC | Confidential | ${safe(project.name)} | ${config.title} | Page ${index + 1} of ${createdPages.length}`;
     target.drawLine({ start: { x: margin, y: footerY + 10 }, end: { x: target.getWidth() - margin, y: footerY + 10 }, thickness: 0.35, color: border });
     const footerFit = fitText(footerText, font, 6.25, target.getWidth() - margin * 2, 5);
     target.drawText(footerFit.text, { x: margin, y: footerY, size: footerFit.size, font, color: muted });
   });
 
   if (form) form.updateFieldAppearances(font);
-  return document.save();
 }
 
+export async function buildPdfBytes(kind: PdfKind, project: PdfProject, issues: PdfIssue[]) {
+  const document = await PDFDocument.create();
+  const brand = await embedBrand(document, await loadBrandAssets());
+  await appendDeliverable(document, kind, project, issues, brand, kind);
+  return document.save();
+}
 
 export async function buildReleasePackageBytes(project: PdfProject, issues: PdfIssue[]) {
   const output = await PDFDocument.create();
   const font = await output.embedFont(StandardFonts.Helvetica);
   const bold = await output.embedFont(StandardFonts.HelveticaBold);
+  const brand = await embedBrand(output, await loadBrandAssets());
   const page = output.addPage([612, 792]);
   const { width, height } = page.getSize();
-  const green = rgb(0.12, 0.2, 0.13);
-  const mediumGreen = rgb(0.2, 0.31, 0.21);
-  const lightGreen = rgb(0.93, 0.96, 0.92);
+  const green = rgb(0.14, 0.19, 0.09);
+  const mediumGreen = rgb(0.28, 0.36, 0.14);
+  const lightGreen = rgb(0.95, 0.97, 0.93);
   const muted = rgb(0.35, 0.4, 0.35);
-  const white = rgb(1, 1, 1);
   const black = rgb(0.08, 0.1, 0.08);
 
-  page.drawRectangle({ x: 0, y: height - 120, width, height: 120, color: green });
-  page.drawRectangle({ x: 48, y: height - 82, width: 42, height: 42, borderColor: white, borderWidth: 1.5 });
-  page.drawText('SL', { x: 58, y: height - 69, size: 15, font: bold, color: white });
-  page.drawText('ScopeLogic LLC', { x: 104, y: height - 60, size: 23, font: bold, color: white });
-  page.drawText('Division 27/28 Scope Consulting', { x: 104, y: height - 82, size: 9, font, color: rgb(0.82, 0.88, 0.81) });
-
-  page.drawText('OFFICIAL DELIVERABLE RELEASE', { x: 48, y: height - 190, size: 11, font: bold, color: mediumGreen });
-  const projectFit = fitText(project.name || 'ScopeLogic Project', bold, 25, width - 96, 15);
-  page.drawText(projectFit.text, { x: 48, y: height - 228, size: projectFit.size, font: bold, color: black });
+  const logoSize = brand.full.scaleToFit(360, 250);
+  page.drawImage(brand.full, {
+    x: (width - logoSize.width) / 2,
+    y: height - 300,
+    width: logoSize.width,
+    height: logoSize.height,
+  });
+  page.drawLine({ start: { x: 48, y: height - 325 }, end: { x: width - 48, y: height - 325 }, thickness: 2.2, color: green });
+  page.drawText('OFFICIAL DELIVERABLE RELEASE', { x: 48, y: height - 365, size: 11, font: bold, color: mediumGreen });
+  const projectFit = fitText(project.name || 'ScopeLogic Project', bold, 24, width - 96, 15);
+  page.drawText(projectFit.text, { x: 48, y: height - 405, size: projectFit.size, font: bold, color: black });
   const clientFit = fitText(project.client || 'GC / Client not entered', font, 12, width - 96, 8);
-  page.drawText(clientFit.text, { x: 48, y: height - 255, size: clientFit.size, font, color: muted });
+  page.drawText(clientFit.text, { x: 48, y: height - 433, size: clientFit.size, font, color: muted });
 
-  page.drawRectangle({ x: 48, y: height - 370, width: width - 96, height: 82, color: lightGreen, borderColor: mediumGreen, borderWidth: 0.6 });
-  page.drawText('DOCUMENT REVISION', { x: 64, y: height - 315, size: 7, font: bold, color: muted });
-  page.drawText(project.revision || 'Rev 0', { x: 64, y: height - 343, size: 18, font: bold, color: black });
-  page.drawText('VERSION DATE', { x: 310, y: height - 315, size: 7, font: bold, color: muted });
-  page.drawText(project.versionDate || 'Not set', { x: 310, y: height - 343, size: 13, font: bold, color: black });
+  page.drawRectangle({ x: 48, y: height - 545, width: width - 96, height: 82, color: lightGreen, borderColor: mediumGreen, borderWidth: 0.6 });
+  page.drawText('DOCUMENT REVISION', { x: 64, y: height - 490, size: 7, font: bold, color: muted });
+  page.drawText(project.revision || 'Rev 0', { x: 64, y: height - 520, size: 18, font: bold, color: black });
+  page.drawText('VERSION DATE', { x: 310, y: height - 490, size: 7, font: bold, color: muted });
+  page.drawText(project.versionDate || 'Not set', { x: 310, y: height - 520, size: 13, font: bold, color: black });
 
-  page.drawText('Included Deliverables', { x: 48, y: height - 420, size: 12, font: bold, color: black });
+  page.drawText('Included Deliverables', { x: 48, y: height - 585, size: 12, font: bold, color: black });
   const titles = ['Recommended SOW Matrix', 'Clarification Matrix', 'Formal RFI', 'Contractor Response Checklist', 'Snippet Register'];
   titles.forEach((title, index) => {
-    const y = height - 452 - index * 31;
-    page.drawRectangle({ x: 50, y: y - 3, width: 10, height: 10, color: mediumGreen });
-    page.drawText(title, { x: 72, y, size: 10, font, color: black });
+    const itemY = height - 616 - index * 25;
+    page.drawRectangle({ x: 50, y: itemY - 3, width: 9, height: 9, color: mediumGreen });
+    page.drawText(title, { x: 70, y: itemY, size: 9, font, color: black });
   });
   page.drawLine({ start: { x: 48, y: 62 }, end: { x: width - 48, y: 62 }, thickness: 0.5, color: mediumGreen });
   page.drawText('Prepared by ScopeLogic LLC | Confidential', { x: 48, y: 42, size: 7, font, color: muted });
 
   const kinds: PdfKind[] = ['sow', 'clarifications', 'rfi', 'checklist', 'snippets'];
   for (const kind of kinds) {
-    const bytes = await buildPdfBytes(kind, project, issues);
-    const source = await PDFDocument.load(bytes);
-    const copied = await output.copyPages(source, source.getPageIndices());
-    copied.forEach((copiedPage) => output.addPage(copiedPage));
+    await appendDeliverable(output, kind, project, issues, brand, `release_${kind}`);
   }
   return output.save();
 }
