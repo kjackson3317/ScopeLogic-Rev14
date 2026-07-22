@@ -340,7 +340,8 @@ async function appendDeliverable(
           const options = ['Included', 'Excluded', 'Included as Alternate', 'Clarification Required', 'Not Applicable'];
           dropdown.addOptions(options);
           dropdown.select(options.includes(issue.response) ? issue.response : 'Included');
-          dropdown.setFontSize(6);
+          // addToPage generates the field's /DA entry. setFontSize must run
+          // afterwards or pdf-lib throws: No /DA (default appearance) entry found.
           dropdown.addToPage(page, {
             x: cellX + 5,
             y: y - rowHeight + 6,
@@ -350,12 +351,15 @@ async function appendDeliverable(
             borderColor: mediumGreen,
             backgroundColor: white,
             textColor: black,
+            font,
           });
+          dropdown.setFontSize(6);
+          dropdown.updateAppearances(font);
         } else {
           const field = form.createTextField(`${formPrefix}_reason_${rowIndex + 1}`);
           field.enableMultiline();
           if (issue.responseReason) field.setText(safe(issue.responseReason));
-          field.setFontSize(6);
+          // As with dropdowns, add the widget first so pdf-lib creates /DA.
           field.addToPage(page, {
             x: cellX + 5,
             y: y - rowHeight + 6,
@@ -365,7 +369,10 @@ async function appendDeliverable(
             borderColor: mediumGreen,
             backgroundColor: white,
             textColor: black,
+            font,
           });
+          field.setFontSize(6);
+          field.updateAppearances(font);
         }
       } else if (isChecklistField && !firstFragment) {
         page.drawText('Continued', { x: cellX + 4, y: y - 13, size: 6, font, color: muted });

@@ -12,6 +12,27 @@ type Project = {
   systems: string[];
   revision: string;
   modified: string;
+  contract: ContractDetails;
+};
+
+type ContractDetails = {
+  offering: string;
+  engagement: string;
+  tier: string;
+  contractNumber: string;
+  amount: string;
+  status: string;
+  startDate: string;
+  targetDate: string;
+  notes: string;
+};
+
+type CalendarEntry = {
+  id: string;
+  date: string;
+  title: string;
+  type: string;
+  projectId: string;
 };
 
 type Issue = {
@@ -82,8 +103,29 @@ const PROJECT_STATUS_OPTIONS = ['Planning', 'Document Review', 'Bidding', 'Under
 const ISSUE_STATUS_OPTIONS = ['Open', 'Under Review', 'Answered', 'Closed'];
 const DOCUMENT_TYPES = ['Drawings', 'Specifications', 'Addendums', 'Revisions', 'Narratives', 'General Bid Documents', 'Contractor Checklist'];
 const RESPONSE_OPTIONS = ['Included', 'Excluded', 'Included as Alternate', 'Clarification Required', 'Not Applicable'];
+const CONTRACT_OFFERINGS = [
+  'Product 1 — Technology Scope & Risk Assessment',
+  'Product 2 — Bid Analysis & Budget Validation',
+  'Product 3 — Procurement & Award Support',
+  'Product 4 — Technology Project Advisory Services',
+  'Custom Engagement',
+];
+const CONTRACT_STATUS_OPTIONS = ['Draft', 'Proposal Sent', 'Under Review', 'Executed', 'In Progress', 'Complete', 'Cancelled'];
+const CALENDAR_EVENT_TYPES = ['Bid / Proposal Due', 'Document Review', 'Client Meeting', 'RFI Deadline', 'Contract Milestone', 'Delivery Date', 'Other'];
 
-const blankProject = (id: string): Project => ({ id, name: 'New ScopeLogic Project', client: '', versionDate: new Date().toISOString().slice(0, 10), status: 'Planning', systems: [], revision: 'Rev 0', modified: 'Now' });
+const blankContract = (): ContractDetails => ({
+  offering: 'Product 1 — Technology Scope & Risk Assessment',
+  engagement: 'Standalone',
+  tier: 'Range',
+  contractNumber: '',
+  amount: '',
+  status: 'Draft',
+  startDate: '',
+  targetDate: '',
+  notes: '',
+});
+
+const blankProject = (id: string): Project => ({ id, name: 'New ScopeLogic Project', client: '', versionDate: new Date().toISOString().slice(0, 10), status: 'Planning', systems: [], revision: 'Rev 0', modified: 'Now', contract: blankContract() });
 const blankIssue = (number: number): Issue => ({ uid: crypto.randomUUID(), id: `SLR-${String(number).padStart(3, '0')}`, system: 'Structured Cabling', customSystem: '', title: '', status: 'Open', concern: '', rfiQuestion: '', basis: '', reason: '', reference: '', rfi: '', resolution: '', snippet: '', sow: true, clarification: true, formalRfi: false, checklist: true, response: 'Included', responseReason: '' });
 const cloneIssue = (issue: Issue): Issue => JSON.parse(JSON.stringify(issue));
 const systemName = (issue: Issue) => (issue.system === 'Other' ? issue.customSystem || 'Other' : issue.system);
@@ -103,6 +145,7 @@ const normalizeProject = (project: Partial<Project> & { id: string } & { bidDate
   versionDate: project.versionDate || project.bidDate || new Date().toISOString().slice(0, 10),
   systems: Array.isArray(project.systems) ? project.systems : String(project.systems || '').split(',').map((item) => item.trim()).filter(Boolean),
   revision: project.revision || 'Rev 0',
+  contract: { ...blankContract(), ...(project.contract || {}) },
 });
 
 const normalizeIssue = (issue: Partial<Issue> & Pick<Issue, 'uid' | 'id'>): Issue => ({
@@ -110,6 +153,38 @@ const normalizeIssue = (issue: Partial<Issue> & Pick<Issue, 'uid' | 'id'>): Issu
   ...issue,
   rfiQuestion: issue.rfiQuestion ?? (issue.formalRfi ? issue.concern || '' : ''),
 });
+
+const contractEngagementOptions = (offering: string) => {
+  if (offering.startsWith('Product 2')) return ['Standalone', 'Add-On After Product 1'];
+  if (offering.startsWith('Product 3')) return ['Standalone', 'Add-On After Prior ScopeLogic Service'];
+  if (offering.startsWith('Product 4')) return ['Monthly Retainer'];
+  if (offering === 'Custom Engagement') return ['Custom'];
+  return ['Standalone'];
+};
+
+const contractTierOptions = (offering: string) => {
+  if (offering.startsWith('Product 2')) return ['Small', 'Medium', 'Large'];
+  if (offering.startsWith('Product 4')) return ['Light', 'Standard', 'Advanced'];
+  if (offering === 'Custom Engagement') return ['Custom'];
+  return ['Range'];
+};
+
+const pricingGuidance = (contract: ContractDetails) => {
+  if (contract.offering.startsWith('Product 1')) return '$3,000–$10,000 standalone';
+  if (contract.offering.startsWith('Product 2')) {
+    const standalone: Record<string, string> = { Small: '$3,500', Medium: '$5,500', Large: '$8,500+' };
+    const addon: Record<string, string> = { Small: '$2,000', Medium: '$3,500', Large: '$5,000' };
+    return contract.engagement.startsWith('Add-On') ? `${addon[contract.tier] || '$2,000–$5,000'} add-on` : `${standalone[contract.tier] || '$3,500–$8,500+'} standalone`;
+  }
+  if (contract.offering.startsWith('Product 3')) return contract.engagement.startsWith('Add-On') ? '$2,500–$6,000 add-on' : '$4,000–$9,000 standalone';
+  if (contract.offering.startsWith('Product 4')) {
+    const retainers: Record<string, string> = { Light: '$2,000–$3,500/month', Standard: '$3,500–$6,500/month', Advanced: '$6,500–$12,000+/month' };
+    return `${retainers[contract.tier] || '$2,000–$12,000+/month'}; $3,000–$10,000 onboarding when no prior ScopeLogic service exists`;
+  }
+  return 'Custom pricing';
+};
+
+const dateKey = (year: number, month: number, day: number) => `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 
 const bytesToBase64 = (bytes: Uint8Array) => {
   let binary = '';
@@ -198,9 +273,10 @@ export default function Home() {
   const [emailSettings, setEmailSettings] = useState<EmailSettings>({ defaultFrom: '', additionalFrom: [], replyTo: '' });
   const [emailDraft, setEmailDraft] = useState<EmailDraft | null>(null);
   const [emailSending, setEmailSending] = useState(false);
+  const [calendarEntries, setCalendarEntries] = useState<CalendarEntry[]>([]);
 
   useEffect(() => {
-    const raw = localStorage.getItem('scopelogic-r14-5') || localStorage.getItem('scopelogic-r14-4') || localStorage.getItem('scopelogic-r14-3') || localStorage.getItem('scopelogic-r14-2');
+    const raw = localStorage.getItem('scopelogic-r14-6') || localStorage.getItem('scopelogic-r14-5') || localStorage.getItem('scopelogic-r14-4') || localStorage.getItem('scopelogic-r14-3') || localStorage.getItem('scopelogic-r14-2');
     if (!raw) return;
     try {
       const data = JSON.parse(raw);
@@ -214,14 +290,15 @@ export default function Home() {
       setNotesByProject(data.notesByProject || { p1: '' });
       setExportsByProject(data.exportsByProject || { p1: [] });
       setEmailSettings(data.emailSettings || { defaultFrom: '', additionalFrom: [], replyTo: '' });
+      setCalendarEntries(data.calendarEntries || []);
     } catch {
       setDialog({ kind: 'message', title: 'Saved Data Could Not Be Loaded', message: 'ScopeLogic started with a clean local workspace because the saved browser data was unreadable.' });
     }
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('scopelogic-r14-5', JSON.stringify({ projects, projectId, issuesByProject, docsByProject, templates, notesByProject, exportsByProject, emailSettings }));
-  }, [projects, projectId, issuesByProject, docsByProject, templates, notesByProject, exportsByProject, emailSettings]);
+    localStorage.setItem('scopelogic-r14-6', JSON.stringify({ projects, projectId, issuesByProject, docsByProject, templates, notesByProject, exportsByProject, emailSettings, calendarEntries }));
+  }, [projects, projectId, issuesByProject, docsByProject, templates, notesByProject, exportsByProject, emailSettings, calendarEntries]);
 
 
   const project = projects.find((item) => item.id === projectId) || projects[0];
@@ -397,7 +474,7 @@ export default function Home() {
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileNav ? 'show' : ''}`}>
-        <div className="brand"><div className="brand-mark"><img src="/brand/scopelogic-logo-mark.png" alt="ScopeLogic" /></div><div><img className="brand-wordmark" src="/brand/scopelogic-wordmark.png" alt="ScopeLogic" /><span>Revision 14.5</span></div></div>
+        <div className="brand"><div className="brand-mark"><img src="/brand/scopelogic-logo-mark.png" alt="ScopeLogic" /></div><div><div className="brand-name-box"><img className="brand-wordmark" src="/brand/scopelogic-wordmark.png" alt="ScopeLogic" /></div><span>Revision 14.6</span></div></div>
         <button className="project-switch" onClick={() => setView('projects')}><span>Current project</span><b>{project.name}</b><small>Switch projects</small></button>
         <Nav label="PROJECT" items={[["projects", "Project Library"], ["dashboard", "Dashboard"], ["setup", "Project Setup"]]} view={view} setView={setView} />
         <Nav label="WORKSPACE" items={[["internal", "ScopeLogic Internal Matrix"], ["documents", "Project Documents"], ["notes", "Internal Notes"]]} view={view} setView={setView} />
@@ -411,8 +488,8 @@ export default function Home() {
           <div className="top-actions"><button className="secondary" onClick={downloadReleasePackage}>Generate All PDFs</button><button className="secondary" onClick={() => prepareEmail('release', 'Official GC Release Package')}>Email All PDFs</button><button className="secondary" onClick={() => setView('documents')}>Documents</button><button className="primary" onClick={() => newDraft()}>+ New SLR</button></div>
         </header>
         <div className="page">
-          {view === 'projects' && <ProjectLibrary projects={projects} active={projectId} open={(id) => { setProjectId(id); setSelectedUid(''); setDraft(null); setView('dashboard'); }} add={addProject} />}
-          {view === 'dashboard' && <Dashboard project={project} issues={issues} docs={docs} go={setView} generateAll={downloadReleasePackage} emailAll={() => prepareEmail('release', 'Official GC Release Package')} />}
+          {view === 'projects' && <ProjectLibrary projects={projects} active={projectId} entries={calendarEntries} open={(id) => { setProjectId(id); setSelectedUid(''); setDraft(null); setView('dashboard'); }} add={addProject} addEntry={(entry) => setCalendarEntries((items) => [...items, entry])} deleteEntry={(id) => setCalendarEntries((items) => items.filter((item) => item.id !== id))} />}
+          {view === 'dashboard' && <Dashboard project={project} issues={issues} docs={docs} go={setView} generateAll={downloadReleasePackage} emailAll={() => prepareEmail('release', 'Official GC Release Package')} saveContract={(contract) => setProjects((items) => items.map((item) => item.id === projectId ? { ...item, contract, modified: 'Now' } : item))} message={message} />}
           {view === 'setup' && <ProjectSetup project={project} save={(key, value) => setProjects((items) => items.map((item) => item.id === projectId ? { ...item, [key]: value, modified: 'Now' } : item))} />}
           {view === 'internal' && <InternalMatrix issues={filtered} allCount={issues.length} draft={draft} selectedUid={selectedUid} edit={editIssue} setDraft={setDraft} submit={submit} remove={deleteEntry} newDraft={newDraft} saveTemplate={saveTemplate} templates={templates} deleteTemplate={requestDeleteTemplate} search={search} setSearch={setSearch} systems={systems} systemFilter={systemFilter} setSystemFilter={setSystemFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} tab={tab} setTab={setTab} />}
           {view === 'documents' && <Documents projectId={projectId} docs={docs} setDocs={setDocs} openPreview={setPreview} confirmAction={confirmAction} requestInput={requestInput} message={message} />}
@@ -686,8 +763,89 @@ function OfficialLogoStandard() {
 }
 
 function BidLeveling() { return <><PageHead eyebrow="Optional Post-Bid Analysis" title="Bid Leveling Summary" description="Bidder-level executive evaluation remains separate from the Contractor Response Checklist." /><div className="empty-state large"><b>Bid leveling workspace retained.</b><p>This section remains available for bidder strengths, weaknesses, risk, commercial concerns, and recommendation.</p></div></>; }
-function ProjectLibrary({ projects, active, open, add }: { projects: Project[]; active: string; open: (id: string) => void; add: () => void }) { return <><PageHead eyebrow="ScopeLogic" title="Project Library" description="Every new project begins blank at SLR-001." action={<button className="primary" onClick={add}>+ New Project</button>} /><div className="project-grid">{projects.map((project) => <button key={project.id} className={`project-card ${project.id === active ? 'selected' : ''}`} onClick={() => open(project.id)}><span className="status">{project.status}</span><h3>{project.name}</h3><p>{project.client || 'Client not entered'}</p><b>Open project</b></button>)}</div></>; }
-function Dashboard({ project, issues, docs, go, generateAll, emailAll }: { project: Project; issues: Issue[]; docs: Doc[]; go: (view: View) => void; generateAll: () => void; emailAll: () => void }) { return <><PageHead eyebrow="Project Dashboard" title={project.name} description="Submitted scope issues and current project documents." /><div className="metrics"><Metric n={issues.length} label="Submitted SLRs" /><Metric n={issues.filter((issue) => issue.status === 'Open' || issue.status === 'Under Review').length} label="Open Issues" /><Metric n={issues.filter((issue) => issue.formalRfi).length} label="Formal RFIs" /><Metric n={docs.filter((doc) => doc.current).length} label="Current Documents" /></div><div className="button-row"><button className="primary" onClick={() => go('internal')}>Open Internal Matrix</button><button className="secondary" onClick={generateAll}>Generate All PDFs for GC</button><button className="secondary" onClick={emailAll}>Email All PDFs</button></div></>; }
+function ProjectLibrary({ projects, active, entries, open, add, addEntry, deleteEntry }: { projects: Project[]; active: string; entries: CalendarEntry[]; open: (id: string) => void; add: () => void; addEntry: (entry: CalendarEntry) => void; deleteEntry: (id: string) => void }) {
+  const today = new Date();
+  const [month, setMonth] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
+  const [selectedDate, setSelectedDate] = useState(dateKey(today.getFullYear(), today.getMonth(), today.getDate()));
+  const [eventTitle, setEventTitle] = useState('');
+  const [eventType, setEventType] = useState(CALENDAR_EVENT_TYPES[0]);
+  const [eventProjectId, setEventProjectId] = useState(active || projects[0]?.id || '');
+  useEffect(() => { if (!projects.some((project) => project.id === eventProjectId)) setEventProjectId(active || projects[0]?.id || ''); }, [projects, active, eventProjectId]);
+
+  const year = month.getFullYear();
+  const monthIndex = month.getMonth();
+  const firstWeekday = new Date(year, monthIndex, 1).getDay();
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const calendarCells = Array.from({ length: firstWeekday + daysInMonth }, (_, index) => index < firstWeekday ? null : index - firstWeekday + 1);
+  const selectedEntries = entries.filter((entry) => entry.date === selectedDate).sort((a, b) => a.title.localeCompare(b.title));
+  const saveEvent = () => {
+    if (!selectedDate || !eventTitle.trim()) return;
+    addEntry({ id: crypto.randomUUID(), date: selectedDate, title: eventTitle.trim(), type: eventType, projectId: eventProjectId });
+    setEventTitle('');
+  };
+
+  return <>
+    <PageHead eyebrow="ScopeLogic" title="Project Library" description="Every new project begins blank at SLR-001. Use the calendar to track bid dates, reviews, meetings, and delivery milestones." action={<button className="primary" onClick={add}>+ New Project</button>} />
+    <div className="project-library-layout">
+      <div className="project-grid">{projects.map((project) => <button key={project.id} className={`project-card ${project.id === active ? 'selected' : ''}`} onClick={() => open(project.id)}><span className="status">{project.status}</span><h3>{project.name}</h3><p>{project.client || 'Client not entered'}</p><div className="project-contract-summary"><span>{project.contract.status}</span><b>{project.contract.offering.replace(/^Product \d — /, '')}</b></div><b>Open project</b></button>)}</div>
+      <section className="calendar-panel">
+        <div className="calendar-head"><button className="secondary" onClick={() => setMonth(new Date(year, monthIndex - 1, 1))}>Previous</button><div><span>Important Dates</span><h2>{month.toLocaleString(undefined, { month: 'long', year: 'numeric' })}</h2></div><button className="secondary" onClick={() => setMonth(new Date(year, monthIndex + 1, 1))}>Next</button></div>
+        <div className="calendar-weekdays">{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => <b key={day}>{day}</b>)}</div>
+        <div className="calendar-grid">{calendarCells.map((day, index) => {
+          if (!day) return <div className="calendar-day empty" key={`empty-${index}`} />;
+          const key = dateKey(year, monthIndex, day);
+          const dayEntries = entries.filter((entry) => entry.date === key);
+          const isToday = key === dateKey(today.getFullYear(), today.getMonth(), today.getDate());
+          return <button key={key} className={`calendar-day ${selectedDate === key ? 'selected' : ''} ${isToday ? 'today' : ''}`} onClick={() => setSelectedDate(key)}><strong>{day}</strong>{dayEntries.slice(0, 2).map((entry) => <span key={entry.id}>{entry.title}</span>)}{dayEntries.length > 2 && <em>+{dayEntries.length - 2} more</em>}</button>;
+        })}</div>
+        <div className="calendar-editor">
+          <div><span>Selected date</span><b>{selectedDate}</b></div>
+          <input value={eventTitle} onChange={(event) => setEventTitle(event.target.value)} placeholder="Important date or milestone" />
+          <select value={eventType} onChange={(event) => setEventType(event.target.value)}>{CALENDAR_EVENT_TYPES.map((type) => <option key={type}>{type}</option>)}</select>
+          <select value={eventProjectId} onChange={(event) => setEventProjectId(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
+          <button className="primary" disabled={!eventTitle.trim()} onClick={saveEvent}>Add Date</button>
+        </div>
+        <div className="calendar-event-list">{selectedEntries.length ? selectedEntries.map((entry) => <div key={entry.id}><div><b>{entry.title}</b><span>{entry.type} · {projects.find((project) => project.id === entry.projectId)?.name || 'General'}</span></div><button onClick={() => deleteEntry(entry.id)}>Remove</button></div>) : <p>No important dates marked for this day.</p>}</div>
+      </section>
+    </div>
+  </>;
+}
+
+function Dashboard({ project, issues, docs, go, generateAll, emailAll, saveContract, message }: { project: Project; issues: Issue[]; docs: Doc[]; go: (view: View) => void; generateAll: () => void; emailAll: () => void; saveContract: (contract: ContractDetails) => void; message: (title: string, body: string) => void }) {
+  const [contract, setContract] = useState<ContractDetails>(project.contract || blankContract());
+  useEffect(() => setContract(project.contract || blankContract()), [project.id, project.contract]);
+  const currentDrawings = docs.filter((doc) => doc.current && doc.type === 'Drawings');
+  const engagements = contractEngagementOptions(contract.offering);
+  const tiers = contractTierOptions(contract.offering);
+  const patchOffering = (offering: string) => {
+    const engagement = contractEngagementOptions(offering)[0];
+    const tier = contractTierOptions(offering)[0];
+    setContract((current) => ({ ...current, offering, engagement, tier }));
+  };
+  return <>
+    <PageHead eyebrow="Project Dashboard" title={project.name} description="Submitted scope issues, current drawings, and engagement details." />
+    <div className="metrics"><Metric n={issues.length} label="Submitted SLRs" /><Metric n={issues.filter((issue) => issue.status === 'Open' || issue.status === 'Under Review').length} label="Open Issues" /><Metric n={issues.filter((issue) => issue.formalRfi).length} label="Formal RFIs" /><Metric n={currentDrawings.length} label="Current Drawings" /></div>
+    <div className="button-row dashboard-actions"><button className="primary" onClick={() => go('internal')}>Open Internal Matrix</button><button className="secondary" onClick={generateAll}>Generate All PDFs for GC</button><button className="secondary" onClick={emailAll}>Email All PDFs</button></div>
+    <div className="dashboard-grid dashboard-detail-grid">
+      <section className="panel current-drawings-panel"><div className="panel-head"><div><span>Document Control</span><h2>Current Drawings</h2></div><button onClick={() => go('documents')}>Open Project Documents</button></div>{currentDrawings.length ? currentDrawings.map((doc) => <div className="document-line" key={doc.id}><div><b>{doc.name}</b><span>{doc.fileName}</span></div><div><b>{doc.revision || 'Revision not entered'}</b><span>{doc.date || 'Issue date not entered'}</span></div></div>) : <div className="empty-panel"><b>No drawings are marked current.</b><p>Upload drawings in Project Documents and select the Current Document checkbox.</p></div>}</section>
+      <section className="panel contract-panel"><div className="panel-head"><div><span>Engagement</span><h2>Contract Details</h2></div><span className="contract-status">{contract.status}</span></div>
+        <div className="contract-form">
+          <SelectField label="Product Offering" value={contract.offering} options={CONTRACT_OFFERINGS} onChange={patchOffering} />
+          <SelectField label="Engagement Basis" value={contract.engagement} options={engagements} onChange={(value) => setContract((current) => ({ ...current, engagement: value }))} />
+          <SelectField label="Pricing Tier" value={contract.tier} options={tiers} onChange={(value) => setContract((current) => ({ ...current, tier: value }))} />
+          <SelectField label="Contract Status" value={contract.status} options={CONTRACT_STATUS_OPTIONS} onChange={(value) => setContract((current) => ({ ...current, status: value }))} />
+          <Field label="Contract / Proposal Number" value={contract.contractNumber} onChange={(value) => setContract((current) => ({ ...current, contractNumber: value }))} />
+          <Field label="Contract Amount" value={contract.amount} onChange={(value) => setContract((current) => ({ ...current, amount: value }))} />
+          <Field label="Start Date" type="date" value={contract.startDate} onChange={(value) => setContract((current) => ({ ...current, startDate: value }))} />
+          <Field label="Target Completion" type="date" value={contract.targetDate} onChange={(value) => setContract((current) => ({ ...current, targetDate: value }))} />
+          <div className="pricing-guidance"><span>Established pricing guidance</span><b>{pricingGuidance(contract)}</b><p>Products 1–3 include one virtual review meeting per bid cycle. Travel is included within the established 50-mile Atlanta radius; mileage is reimbursable and travel time is excluded from monthly hours.</p></div>
+          <label className="field contract-notes"><span>Contract Notes</span><textarea value={contract.notes} onChange={(event) => setContract((current) => ({ ...current, notes: event.target.value }))} placeholder="Scope limits, billing terms, meeting allowances, add-ons, or special conditions..." /></label>
+        </div>
+        <div className="contract-actions"><button className="primary" onClick={() => { saveContract(contract); message('Contract Details Saved', 'The project dashboard contract details were saved.'); }}>Save Contract Details</button></div>
+      </section>
+    </div>
+  </>;
+}
 function Nav({ label, items, view, setView }: { label: string; items: [View, string][]; view: View; setView: (view: View) => void }) { return <div className="nav-group"><span>{label}</span>{items.map(([id, name]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}>{name}</button>)}</div>; }
 function SimplePage({ title, text }: { title: string; text: string }) { return <><PageHead eyebrow="Internal" title={title} description={text} /><div className="empty-state large"><b>{title}</b></div></>; }
 function PageHead({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) { return <div className="page-head"><div><span>{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>; }

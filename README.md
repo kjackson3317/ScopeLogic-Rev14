@@ -1,6 +1,6 @@
-# ScopeLogic Revision 14.5
+# ScopeLogic Revision 14.6
 
-Revision 14.5 retains the Revision 14.4 workflow and adds direct PDF email delivery, a dedicated Formal RFI Question field, repaired individual/combined PDF generation, and the official ScopeLogic logo system.
+Revision 14.6 retains the approved Revision 14.5.1 workflow and adds project-library date management, dashboard current-drawing control, engagement contract details, and corrected sidebar wordmark rendering.
 
 ## Major changes
 
@@ -37,3 +37,21 @@ SCOPELOGIC_DEFAULT_REPLY_TO=yourname@your-domain.com
 ## Brand governance
 
 See `OFFICIAL-LOGO-STANDARD.md`. The original uploaded artwork is stored at `public/brand/scopelogic-official-logo-source.png`.
+
+
+## Revision 14.5.1 - Checklist Form Appearance Fix
+
+- Corrected editable Contractor Response Checklist form creation.
+- Dropdown and multiline Reason fields now create their widget/default appearance before applying the 6 pt font size.
+- Explicitly embeds Helvetica in each form widget and refreshes its appearance stream.
+- Resolves `No /DA (default appearance) entry found for field: checklist_response_*`.
+
+
+## Revision 14.6 - Project Management Dashboard
+
+- Corrected the sidebar wordmark so the ScopeLogic name is visible in the white brand panel.
+- Added an Important Dates calendar to the Project Library. Calendar entries can be assigned to a project and categorized as bid dates, meetings, RFI deadlines, reviews, delivery dates, or other milestones.
+- Added a Current Drawings panel to the Dashboard. Only documents typed as Drawings and checked Current Document appear.
+- Added editable Contract Details to each project Dashboard.
+- Contract pricing guidance uses the established ScopeLogic Product 1-4 pricing structure, including standalone/add-on pricing and Product 4 monthly retainer tiers.
+- Contract details include offering, engagement basis, pricing tier, contract/proposal number, amount, status, start date, target completion, and notes.
