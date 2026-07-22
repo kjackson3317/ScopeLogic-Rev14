@@ -1,23 +1,27 @@
-# ScopeLogic Revision 14.2 - Workflow and PDF Correction Release
+# ScopeLogic Revision 14.3
 
-## Corrections
-- New projects begin blank at SLR-001.
-- No preloaded templates. Save any SLR as an individually selectable template.
-- Internal Matrix uses draft + Submit Entry workflow.
-- SLR, RFI, and snippet numbers are generated automatically and renumber after deletion.
-- Static sample PDFs were removed from the workflow.
-- Generate/Update PDF uses the current submitted project data.
-- PDF table text wraps inside fixed cell widths and creates new pages as needed.
-- Contractor Response Checklist generates as an editable AcroForm PDF with dropdowns and multiline reason fields.
-- Redundant SLR Reference Register removed from navigation.
+Focused refinement of the Revision 14 application.
+
+## Revision 14.3 changes
+
+- Replaces browser alert, prompt, and confirm dialogs with branded in-app dialogs.
+- Adds project status and multi-system dropdown controls.
+- Adds document-type dropdowns for Drawings, Specifications, Addendums, Revisions, Narratives, General Bid Documents, and Contractor Checklist.
+- Adds project document uploads with browser-persistent IndexedDB file storage.
+- Rebuilds Project Documents as a Windows Explorer-style workspace with Project Documents and Previous Documents folders.
+- Adds Replace Revision workflow that moves superseded files to Previous Documents.
+- Shows RFI number below SLR number in the Clarification Matrix when applicable.
+- Rebuilds PDF table grid calculations so borders share exact coordinates and column widths match the printable area.
+- Restores standardized ScopeLogic LLC PDF headers, company mark, project metadata, revision, and standardized footer.
+- Adds contractor checklist instruction note and taller multiline editable response-reason fields.
+
+## Run locally
+
+```bash
+npm install
+npm run dev
+```
 
 ## Deploy
-Upload all files to the GitHub repository root and redeploy in Vercel. Vercel will install `pdf-lib` during build.
 
-
-## Revision 14.2.1 — Global SLR Template Library
-
-- Saved SLR templates are stored globally rather than by project.
-- Templates created in any project remain available in every other project.
-- The Internal Matrix now provides a template dropdown with Use Template and Delete Template controls.
-- New projects remain blank until the user creates an SLR or selects a saved template.
+Upload the repository contents to GitHub. Vercel will detect Next.js and run `npm run build`.

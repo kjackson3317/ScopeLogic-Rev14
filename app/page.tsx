@@ -1,107 +1,506 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { buildPdfBytes, type PdfKind } from './pdf-generator';
 
-type Project={id:string;name:string;client:string;bidDate:string;status:string;systems:string;modified:string};
-type Issue={uid:string;id:string;system:string;customSystem:string;title:string;status:string;concern:string;basis:string;reason:string;reference:string;rfi:string;resolution:string;snippet:string;sow:boolean;clarification:boolean;formalRfi:boolean;checklist:boolean;response:string;responseReason:string};
-type Template={uid:string;name:string;issue:Omit<Issue,'uid'|'id'|'rfi'|'snippet'>};
-type Doc={id:string;type:string;name:string;revision:string;date:string;current:boolean;notes:string;fileName?:string;fileUrl?:string};
-type View='projects'|'dashboard'|'setup'|'internal'|'documents'|'sow'|'clarifications'|'rfi'|'checklist'|'leveling'|'snippets'|'exports'|'standards';
-type PdfKind='sow'|'clarifications'|'rfi'|'checklist'|'snippets';
+type Project = {
+  id: string;
+  name: string;
+  client: string;
+  bidDate: string;
+  status: string;
+  systems: string[];
+  revision: string;
+  modified: string;
+};
 
-const blankProject=(id:string):Project=>({id,name:'New ScopeLogic Project',client:'',bidDate:'',status:'Planning',systems:'',modified:'Now'});
-const blankIssue=(n:number):Issue=>({uid:crypto.randomUUID(),id:`SLR-${String(n).padStart(3,'0')}`,system:'Structured Cabling',customSystem:'',title:'',status:'Open',concern:'',basis:'',reason:'',reference:'',rfi:'',resolution:'',snippet:'',sow:true,clarification:true,formalRfi:false,checklist:true,response:'Included',responseReason:''});
-const cloneIssue=(x:Issue):Issue=>JSON.parse(JSON.stringify(x));
-const normalize=(items:Issue[])=>{let r=0,s=0;return items.map((x,i)=>({...x,id:`SLR-${String(i+1).padStart(3,'0')}`,rfi:x.formalRfi?`RFI-${String(++r).padStart(3,'0')}`:'',snippet:x.snippet?`SNP-${String(++s).padStart(3,'0')}`:''}));};
-const sys=(i:Issue)=>i.system==='Other'?(i.customSystem||'Other'):i.system;
+type Issue = {
+  uid: string;
+  id: string;
+  system: string;
+  customSystem: string;
+  title: string;
+  status: string;
+  concern: string;
+  basis: string;
+  reason: string;
+  reference: string;
+  rfi: string;
+  resolution: string;
+  snippet: string;
+  sow: boolean;
+  clarification: boolean;
+  formalRfi: boolean;
+  checklist: boolean;
+  response: string;
+  responseReason: string;
+};
 
-const navDeliverables:[View,string][]=[['sow','Recommended SOW Matrix'],['clarifications','Clarification Matrix'],['rfi','Formal RFI'],['checklist','Contractor Response Checklist'],['leveling','Bid Leveling Summary'],['snippets','Snippet Register']];
+type Template = { uid: string; name: string; issue: Omit<Issue, 'uid' | 'id' | 'rfi' | 'snippet'> };
+type Doc = {
+  id: string;
+  type: string;
+  name: string;
+  revision: string;
+  date: string;
+  current: boolean;
+  notes: string;
+  fileName: string;
+  fileType: string;
+  sizeBytes: number;
+};
+type View = 'projects' | 'dashboard' | 'setup' | 'internal' | 'documents' | 'sow' | 'clarifications' | 'rfi' | 'checklist' | 'leveling' | 'snippets' | 'exports' | 'standards';
+type DialogState =
+  | { kind: 'message'; title: string; message: string; confirmLabel?: string }
+  | { kind: 'confirm'; title: string; message: string; confirmLabel?: string; danger?: boolean; onConfirm: () => void | Promise<void> }
+  | { kind: 'input'; title: string; message: string; initialValue: string; placeholder?: string; confirmLabel?: string; onConfirm: (value: string) => void | Promise<void> };
 
-export default function Home(){
- const [view,setView]=useState<View>('projects');
- const [projects,setProjects]=useState<Project[]>([blankProject('p1')]);
- const [projectId,setProjectId]=useState('p1');
- const [issuesByProject,setIssuesByProject]=useState<Record<string,Issue[]>>({p1:[]});
- const [docsByProject,setDocsByProject]=useState<Record<string,Doc[]>>({p1:[]});
- const [templates,setTemplates]=useState<Template[]>([]);
- const [selectedUid,setSelectedUid]=useState('');
- const [draft,setDraft]=useState<Issue|null>(null);
- const [search,setSearch]=useState('');
- const [systemFilter,setSystemFilter]=useState('All');
- const [statusFilter,setStatusFilter]=useState('All');
- const [tab,setTab]=useState<'details'|'snippets'|'deliverables'|'history'>('details');
- const [mobileNav,setMobileNav]=useState(false);
- const [pdfUrls,setPdfUrls]=useState<Partial<Record<PdfKind,string>>>({});
- const [preview,setPreview]=useState<{title:string;url:string}|null>(null);
+type PreviewState = { title: string; url: string; mode?: 'pdf' | 'image' } | null;
 
- useEffect(()=>{const raw=localStorage.getItem('scopelogic-r14-2');if(raw)try{const d=JSON.parse(raw);setProjects(d.projects||[blankProject('p1')]);setProjectId(d.projectId||'p1');setIssuesByProject(d.issuesByProject||{p1:[]});setDocsByProject(d.docsByProject||{p1:[]});setTemplates(d.templates||[])}catch{}},[]);
- useEffect(()=>{localStorage.setItem('scopelogic-r14-2',JSON.stringify({projects,projectId,issuesByProject,docsByProject,templates}))},[projects,projectId,issuesByProject,docsByProject,templates]);
- useEffect(()=>()=>Object.values(pdfUrls).forEach(u=>u&&URL.revokeObjectURL(u)),[pdfUrls]);
+const SYSTEM_OPTIONS = ['Structured Cabling', 'Network Electronics', 'CCTV', 'Access Control', 'Intrusion Detection', 'Fire Alarm', 'Video Intercom', 'Audio Visual', 'Paging / Intercom', 'Other'];
+const PROJECT_STATUS_OPTIONS = ['Planning', 'Document Review', 'Bidding', 'Under Review', 'Award Support', 'Construction', 'Complete', 'On Hold', 'Archived'];
+const ISSUE_STATUS_OPTIONS = ['Open', 'Under Review', 'Answered', 'Closed'];
+const DOCUMENT_TYPES = ['Drawings', 'Specifications', 'Addendums', 'Revisions', 'Narratives', 'General Bid Documents', 'Contractor Checklist'];
+const RESPONSE_OPTIONS = ['Included', 'Excluded', 'Included as Alternate', 'Clarification Required', 'Not Applicable'];
 
- const project=projects.find(p=>p.id===projectId)||projects[0];
- const issues=issuesByProject[projectId]||[];
- const docs=docsByProject[projectId]||[];
- const setIssues=(f:(a:Issue[])=>Issue[])=>setIssuesByProject(a=>({...a,[projectId]:normalize(f(a[projectId]||[]))}));
- const setDocs=(f:(a:Doc[])=>Doc[])=>setDocsByProject(a=>({...a,[projectId]:f(a[projectId]||[])}));
- const systems=useMemo(()=>['All',...Array.from(new Set(issues.map(sys)))],[issues]);
- const filtered=issues.filter(i=>(systemFilter==='All'||sys(i)===systemFilter)&&(statusFilter==='All'||i.status===statusFilter)&&`${i.id} ${sys(i)} ${i.title} ${i.reference} ${i.rfi}`.toLowerCase().includes(search.toLowerCase()));
+const blankProject = (id: string): Project => ({ id, name: 'New ScopeLogic Project', client: '', bidDate: '', status: 'Planning', systems: [], revision: 'Rev 0', modified: 'Now' });
+const blankIssue = (number: number): Issue => ({ uid: crypto.randomUUID(), id: `SLR-${String(number).padStart(3, '0')}`, system: 'Structured Cabling', customSystem: '', title: '', status: 'Open', concern: '', basis: '', reason: '', reference: '', rfi: '', resolution: '', snippet: '', sow: true, clarification: true, formalRfi: false, checklist: true, response: 'Included', responseReason: '' });
+const cloneIssue = (issue: Issue): Issue => JSON.parse(JSON.stringify(issue));
+const systemName = (issue: Issue) => (issue.system === 'Other' ? issue.customSystem || 'Other' : issue.system);
+const normalizeIssues = (items: Issue[]) => {
+  let rfiNumber = 0;
+  let snippetNumber = 0;
+  return items.map((item, index) => ({
+    ...item,
+    id: `SLR-${String(index + 1).padStart(3, '0')}`,
+    rfi: item.formalRfi ? `RFI-${String(++rfiNumber).padStart(3, '0')}` : '',
+    snippet: item.snippet ? `SNP-${String(++snippetNumber).padStart(3, '0')}` : '',
+  }));
+};
+const normalizeProject = (project: Partial<Project> & { id: string }): Project => ({
+  ...blankProject(project.id),
+  ...project,
+  systems: Array.isArray(project.systems) ? project.systems : String(project.systems || '').split(',').map((item) => item.trim()).filter(Boolean),
+  revision: project.revision || 'Rev 0',
+});
 
- const newDraft=(template?:Template)=>{const x=blankIssue(issues.length+1);if(template)Object.assign(x,JSON.parse(JSON.stringify(template.issue)));setDraft(x);setSelectedUid('');setView('internal')};
- const editIssue=(uid:string)=>{const x=issues.find(i=>i.uid===uid);if(x){setSelectedUid(uid);setDraft(cloneIssue(x))}};
- const submit=()=>{if(!draft)return;if(!draft.title.trim()){alert('Enter a Scope Item / Short Description before submitting.');return}if(draft.system==='Other'&&!draft.customSystem.trim()){alert('Define the Other system before submitting.');return}if(draft.response!=='Included'&&!draft.responseReason.trim()){alert('A reason is required when the contractor response is not Included.');return}setIssues(a=>selectedUid?a.map(i=>i.uid===selectedUid?{...draft,uid:selectedUid}:i):[...a,draft]);setSelectedUid(draft.uid);setDraft(null);setPdfUrls({})};
- const deleteEntry=()=>{if(draft&&!selectedUid){setDraft(null);return}if(!selectedUid)return;setIssues(a=>a.filter(i=>i.uid!==selectedUid));setSelectedUid('');setDraft(null);setPdfUrls({})};
- const saveTemplate=()=>{if(!draft)return;const name=prompt('Template name',draft.title||'Saved SLR Template');if(!name)return;const {uid,id,rfi,snippet,...issue}=draft;setTemplates(t=>[...t,{uid:crypto.randomUUID(),name,issue}])};
- const deleteTemplate=(uid:string)=>setTemplates(t=>t.filter(x=>x.uid!==uid));
- const addProject=()=>{const id=`p${Date.now()}`;setProjects(p=>[...p,blankProject(id)]);setIssuesByProject(a=>({...a,[id]:[]}));setDocsByProject(a=>({...a,[id]:[]}));setProjectId(id);setSelectedUid('');setDraft(null);setView('setup')};
- const updatePdf=async(kind:PdfKind,title:string)=>{const blob=await buildPdf(kind,project,issues);const url=URL.createObjectURL(blob);setPdfUrls(u=>{if(u[kind])URL.revokeObjectURL(u[kind]!);return {...u,[kind]:url}});setPreview({title,url})};
+const navDeliverables: [View, string][] = [
+  ['sow', 'Recommended SOW Matrix'],
+  ['clarifications', 'Clarification Matrix'],
+  ['rfi', 'Formal RFI'],
+  ['checklist', 'Contractor Response Checklist'],
+  ['leveling', 'Bid Leveling Summary'],
+  ['snippets', 'Snippet Register'],
+];
 
- return <div className="app-shell"><aside className={`sidebar ${mobileNav?'show':''}`}><div className="brand"><div className="brand-mark">SL</div><div><strong>ScopeLogic</strong><span>Revision 14.2</span></div></div><button className="project-switch" onClick={()=>setView('projects')}><span>Current project</span><b>{project.name}</b><small>Switch projects ↗</small></button><Nav label="PROJECT" items={[["projects","Project Library"],["dashboard","Dashboard"],["setup","Project Setup"]]} view={view} setView={setView}/><Nav label="WORKSPACE" items={[["internal","ScopeLogic Internal Matrix"],["documents","Project Documents"]]} view={view} setView={setView}/><Nav label="DELIVERABLES" items={navDeliverables} view={view} setView={setView}/><Nav label="ADMINISTRATION" items={[["exports","Export Log"],["standards","ScopeLogic Standards"]]} view={view} setView={setView}/></aside><main className="main"><header className="topbar"><button className="mobile-menu" onClick={()=>setMobileNav(!mobileNav)}>☰</button><div><span>{project.client||'ScopeLogic project'}</span><b>{project.name}</b></div><div className="top-actions"><button className="secondary" onClick={()=>setView('documents')}>Documents</button><button className="primary" onClick={()=>newDraft()}>+ New SLR</button></div></header><div className="page">
- {view==='projects'&&<ProjectLibrary projects={projects} active={projectId} open={id=>{setProjectId(id);setSelectedUid('');setDraft(null);setView('dashboard')}} add={addProject}/>} 
- {view==='dashboard'&&<Dashboard project={project} issues={issues} docs={docs} go={setView}/>} 
- {view==='setup'&&<ProjectSetup project={project} save={(k,v)=>setProjects(a=>a.map(p=>p.id===projectId?{...p,[k]:v,modified:'Now'}:p))}/>} 
- {view==='internal'&&<InternalMatrix issues={filtered} allCount={issues.length} draft={draft} selectedUid={selectedUid} edit={editIssue} setDraft={setDraft} submit={submit} remove={deleteEntry} newDraft={newDraft} saveTemplate={saveTemplate} templates={templates} deleteTemplate={deleteTemplate} search={search} setSearch={setSearch} systems={systems} systemFilter={systemFilter} setSystemFilter={setSystemFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} tab={tab} setTab={setTab}/>} 
- {view==='documents'&&<Documents docs={docs} setDocs={setDocs}/>} 
- {view==='sow'&&<Deliverable title="Recommended SOW Matrix" eyebrow="Primary Flagship Deliverable" description="Uses submitted Internal Matrix entries assigned to Recommended SOW." rows={issues.filter(i=>i.sow)} columns={['SLR','System','Scope Item','Scope Concern','Recommended Bid Basis','Reference']} values={i=>[i.id,sys(i),i.title,i.concern,i.basis,i.reference]} update={()=>updatePdf('sow','Recommended SOW Matrix')} url={pdfUrls.sow} preview={u=>setPreview({title:'Recommended SOW Matrix',url:u})}/>} 
- {view==='clarifications'&&<Deliverable title="Clarification Matrix" eyebrow="GC Working Document" description="Resolution remains blank until an official answer is received." rows={issues.filter(i=>i.clarification)} columns={['SLR','System','Question / Issue','Recommended Bid Basis','Resolution','Status','Reference']} values={i=>[i.id,sys(i),i.concern,i.basis,i.resolution,i.status,i.reference]} update={()=>updatePdf('clarifications','Clarification Matrix')} url={pdfUrls.clarifications} preview={u=>setPreview({title:'Clarification Matrix',url:u})}/>} 
- {view==='rfi'&&<Deliverable title="Formal RFI" eyebrow="A/E Deliverable" description="RFI numbers are generated automatically from submitted entries assigned to Formal RFI." rows={issues.filter(i=>i.formalRfi)} columns={['RFI No.','System','Question','Answer']} values={i=>[i.rfi,sys(i),i.concern,i.resolution]} update={()=>updatePdf('rfi','Formal RFI')} url={pdfUrls.rfi} preview={u=>setPreview({title:'Formal RFI',url:u})}/>} 
- {view==='checklist'&&<Deliverable title="Contractor Response Checklist" eyebrow="Editable PDF" description="The generated PDF contains editable contractor-response dropdowns and reason text fields." rows={issues.filter(i=>i.checklist)} columns={['SLR','System','Scope Item','Response','Reason']} values={i=>[i.id,sys(i),i.title,i.response,i.responseReason]} update={()=>updatePdf('checklist','Contractor Response Checklist')} url={pdfUrls.checklist} preview={u=>setPreview({title:'Contractor Response Checklist',url:u})}/>} 
- {view==='leveling'&&<BidLeveling/>}
- {view==='snippets'&&<Deliverable title="Snippet Register" eyebrow="Supporting Reference Document" description="Snippet numbers are generated automatically when an SLR is marked as having a snippet." rows={issues.filter(i=>i.snippet)} columns={['Snippet No.','SLR','System','Reference','Caption']} values={i=>[i.snippet,i.id,sys(i),i.reference,i.title]} update={()=>updatePdf('snippets','Snippet Register')} url={pdfUrls.snippets} preview={u=>setPreview({title:'Snippet Register',url:u})}/>} 
- {view==='exports'&&<SimplePage title="Export Log" text="PDFs are generated from the current submitted project data when Update PDF is selected."/>}
- {view==='standards'&&<SimplePage title="ScopeLogic Standards" text="Projects begin blank, entries require submission, numbering is project-specific and automatic, and deliverables are generated from submitted records."/>}
- </div></main>{preview&&<div className="modal"><div className="modal-card"><div className="modal-head"><b>{preview.title} PDF Preview</b><button onClick={()=>setPreview(null)}>×</button></div><iframe src={preview.url}/></div></div>}</div>
+function openFileDatabase() {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open('scopelogic-project-files', 1);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains('files')) database.createObjectStore('files');
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
 }
 
-function InternalMatrix(p:any){const d:Issue|null=p.draft;const [selectedTemplate,setSelectedTemplate]=useState('');const patch=(k:keyof Issue,v:any)=>p.setDraft((x:Issue|null)=>x?{...x,[k]:v}:x);const chosenTemplate:Template|undefined=p.templates.find((t:Template)=>t.uid===selectedTemplate);return <><PageHead eyebrow="Primary Workspace" title="ScopeLogic Internal Matrix" description="Entries remain drafts until Submit Entry is selected. Only submitted entries feed deliverables and PDFs." action={<div className="button-row"><button className="secondary" onClick={p.remove}>{d&&!p.selectedUid?'Discard Draft':'Delete'}</button><button className="primary" onClick={()=>p.newDraft()}>+ New Issue</button></div>}/><div className="template-bar template-library"><div><b>SLR Template Library</b><span>Templates are saved globally and remain available across every project.</span></div><select value={selectedTemplate} onChange={(e:any)=>setSelectedTemplate(e.target.value)}><option value="">{p.templates.length?"Select a saved SLR template…":"No saved templates yet"}</option>{p.templates.map((t:Template)=><option key={t.uid} value={t.uid}>{t.name}</option>)}</select><button className="secondary" disabled={!chosenTemplate} onClick={()=>chosenTemplate&&p.newDraft(chosenTemplate)}>Use Template</button><button className="template-delete-button" disabled={!chosenTemplate} onClick={()=>{if(chosenTemplate&&confirm(`Delete template “${chosenTemplate.name}”?`)){p.deleteTemplate(chosenTemplate.uid);setSelectedTemplate('')}}}>Delete Template</button></div><div className="matrix-toolbar"><input placeholder="Search submitted SLRs…" value={p.search} onChange={(e:any)=>p.setSearch(e.target.value)}/><select value={p.systemFilter} onChange={(e:any)=>p.setSystemFilter(e.target.value)}>{p.systems.map((s:string)=><option key={s}>{s}</option>)}</select><select value={p.statusFilter} onChange={(e:any)=>p.setStatusFilter(e.target.value)}><option>All</option><option>Open</option><option>Under Review</option><option>Answered</option><option>Closed</option></select><span>{p.allCount} submitted</span></div><div className="bluebeam-layout"><section className="issue-list"><div className="list-header"><span>SLR / System</span><span>Status</span></div>{!p.issues.length&&<div className="empty-list"><b>No submitted entries</b><p>Create an SLR, complete it, and select Submit Entry.</p></div>}{p.issues.map((i:Issue)=><button key={i.uid} className={p.selectedUid===i.uid?'selected':''} onClick={()=>p.edit(i.uid)}><div><b>{i.id}</b><span>{sys(i)}</span><strong>{i.title}</strong></div><em className={`status-dot ${i.status.toLowerCase().replaceAll(' ','-')}`}>{i.status}</em></button>)}</section><section className="issue-editor">{!d?<div className="empty-state large"><b>Select a submitted SLR or create a new issue.</b><p>Editing does not affect deliverables until Submit Entry is selected.</p></div>:<><div className="draft-banner"><b>{p.selectedUid?'Editing submitted entry':'Unsubmitted draft'}</b><span>{d.id} is provisional until submission.</span></div><div className="issue-title"><div><span>{d.id}</span><input placeholder="Scope Item / Short Description" value={d.title} onChange={e=>patch('title',e.target.value)}/></div><select value={d.status} onChange={e=>patch('status',e.target.value)}><option>Open</option><option>Under Review</option><option>Answered</option><option>Closed</option></select></div><div className="editor-grid"><label>System<select value={d.system} onChange={e=>patch('system',e.target.value)}><option>Structured Cabling</option><option>CCTV</option><option>Access Control</option><option>Intrusion Detection</option><option>Video Intercom</option><option>Audio Visual</option><option>Paging / Intercom</option><option>Other</option></select></label>{d.system==='Other'&&<Field label="Define Other System" value={d.customSystem} onChange={v=>patch('customSystem',v)}/>}</div><TextArea label="Scope Concern" value={d.concern} onChange={v=>patch('concern',v)}/><TextArea label="Recommended Bid Basis" value={d.basis} onChange={v=>patch('basis',v)}/><TextArea label="Reason / Basis" value={d.reason} onChange={v=>patch('reason',v)}/><Field label="Contract Reference or Scope-Gap Basis" value={d.reference} onChange={v=>patch('reference',v)}/><div className="detail-tabs"><button className={p.tab==='details'?'active':''} onClick={()=>p.setTab('details')}>Details</button><button className={p.tab==='snippets'?'active':''} onClick={()=>p.setTab('snippets')}>Snippets</button><button className={p.tab==='deliverables'?'active':''} onClick={()=>p.setTab('deliverables')}>Deliverables</button><button className={p.tab==='history'?'active':''} onClick={()=>p.setTab('history')}>History</button></div>{p.tab==='details'&&<div className="tab-panel two"><label>Contractor Response<select value={d.response} onChange={e=>patch('response',e.target.value)}><option>Included</option><option>Excluded</option><option>Included as Alternate</option><option>Clarification Required</option><option>Not Applicable</option></select></label>{d.response!=='Included'&&<Field label="Required Reason" value={d.responseReason} onChange={v=>patch('responseReason',v)}/>}<Field label="RFI Resolution / Official Answer" value={d.resolution} onChange={v=>patch('resolution',v)}/></div>}{p.tab==='snippets'&&<div className="tab-panel"><Check label="Create an automatically numbered snippet reference for this SLR" value={!!d.snippet} change={v=>patch('snippet',v?'pending':'')}/><p className="help-text">The final SNP number is assigned on submission and renumbered when entries are deleted.</p></div>}{p.tab==='deliverables'&&<div className="tab-panel checklist"><Check label="Recommended SOW Matrix" value={d.sow} change={v=>patch('sow',v)}/><Check label="Clarification Matrix" value={d.clarification} change={v=>patch('clarification',v)}/><Check label="Formal RFI" value={d.formalRfi} change={v=>patch('formalRfi',v)}/><Check label="Contractor Response Checklist" value={d.checklist} change={v=>patch('checklist',v)}/></div>}{p.tab==='history'&&<div className="tab-panel timeline"><p><b>Draft workflow</b><span>Changes remain local until Submit Entry.</span></p></div>}<div className="submit-bar"><button className="secondary" onClick={p.saveTemplate}>Save This SLR as Template</button><button className="primary" onClick={p.submit}>Submit Entry</button></div></>}</section></div></>}
-
-function Deliverable({title,eyebrow,description,rows,columns,values,update,url,preview}:{title:string;eyebrow:string;description:string;rows:Issue[];columns:string[];values:(i:Issue)=>string[];update:()=>void;url?:string;preview:(u:string)=>void}){return <><PageHead eyebrow={eyebrow} title={title} description={description} action={<div className="button-row"><button className="secondary" onClick={update}>{url?'Update PDF':'Generate PDF'}</button><button className="secondary" disabled={!url} onClick={()=>url&&preview(url)}>Preview</button>{url?<a className="primary link-button" href={url} download={`${title.replaceAll(' ','_')}.pdf`}>Download PDF</a>:<button className="primary" disabled>Download PDF</button>}</div>}/><div className="sync-note">PDF status: <b>{url?'Generated from current submitted entries':'Not generated'}</b>. Select Update PDF after changing deliverable assignments or submitted entries.</div><div className="matrix-export"><div className="matrix-table"><div className="matrix-row head" style={{gridTemplateColumns:`repeat(${columns.length},minmax(120px,1fr))`}}>{columns.map(c=><b key={c}>{c}</b>)}</div>{rows.length?rows.map(i=><div className="matrix-row" key={i.uid} style={{gridTemplateColumns:`repeat(${columns.length},minmax(120px,1fr))`}}>{values(i).map((v,n)=><span key={n}>{v||'—'}</span>)}</div>):<div className="empty-state"><b>No submitted entries assigned</b><p>Assign an SLR to this deliverable and submit it from the Internal Matrix.</p></div>}</div></div></>}
-
-async function buildPdf(kind:PdfKind,project:Project,all:Issue[]):Promise<Blob>{
- const {PDFDocument,StandardFonts,rgb}=await import('pdf-lib');
- const legalLandscape:[number,number]=[1008,612],legalPortrait:[number,number]=[612,1008];
- const doc=await PDFDocument.create();const font=await doc.embedFont(StandardFonts.Helvetica);const bold=await doc.embedFont(StandardFonts.HelveticaBold);
- const green=rgb(.16,.22,.15),light=rgb(.93,.95,.92),line=rgb(.72,.76,.71),white=rgb(1,1,1),black=rgb(.08,.10,.08);
- const rows=kind==='sow'?all.filter(i=>i.sow):kind==='clarifications'?all.filter(i=>i.clarification):kind==='rfi'?all.filter(i=>i.formalRfi):kind==='checklist'?all.filter(i=>i.checklist):all.filter(i=>i.snippet);
- const config=kind==='sow'?{title:'Recommended SOW Matrix',headers:['SLR','System','Scope Item','Scope Concern','Recommended Bid Basis','Reference'],widths:[48,82,112,235,245,150],vals:(i:Issue)=>[i.id,sys(i),i.title,i.concern,i.basis,i.reference]}:kind==='clarifications'?{title:'Clarification Matrix',headers:['SLR','System','Question / Issue','Recommended Bid Basis','Resolution','Status','Reference'],widths:[45,75,205,215,155,65,135],vals:(i:Issue)=>[i.id,sys(i),i.concern,i.basis,i.resolution,i.status,i.reference]}:kind==='rfi'?{title:'Formal RFI',headers:['RFI No.','System','Question','Answer'],widths:[65,100,260,155],vals:(i:Issue)=>[i.rfi,sys(i),i.concern,i.resolution]}:kind==='checklist'?{title:'Contractor Response Checklist',headers:['SLR','System','Scope Item','Response','Reason'],widths:[48,90,280,150,300],vals:(i:Issue)=>[i.id,sys(i),i.title,'','']}: {title:'Snippet Register',headers:['Snippet No.','SLR','System','Reference','Caption'],widths:[70,55,110,250,360],vals:(i:Issue)=>[i.snippet,i.id,sys(i),i.reference,i.title]};
- const landscape=kind!=='rfi';const size=landscape?legalLandscape:legalPortrait;const margin=24,headerH=72,footerH=22,fontSize=7,lineH=9;
- const wrap=(text:string,max:number)=>{const words=(text||'').replace(/\s+/g,' ').trim().split(' ').filter(Boolean);const out:string[]=[];let line='';for(const w of words){const test=line?line+' '+w:w;if(font.widthOfTextAtSize(test,fontSize)<=max-10)line=test;else{if(line)out.push(line);if(font.widthOfTextAtSize(w,fontSize)<=max-10)line=w;else{let part='';for(const ch of w){if(font.widthOfTextAtSize(part+ch,fontSize)<=max-10)part+=ch;else{out.push(part);part=ch}}line=part}}}if(line)out.push(line);return out.length?out:[''];};
- let page:any,y=0,pageNo=0;const addPage=()=>{page=doc.addPage(size);pageNo++;const {width,height}=page.getSize();page.drawRectangle({x:0,y:height-46,width,height:46,color:green});page.drawText('ScopeLogic',{x:margin,y:height-29,size:17,font:bold,color:white});page.drawText(config.title,{x:margin+130,y:height-27,size:13,font:bold,color:white});page.drawText(project.name,{x:margin,y:height-61,size:8,font:bold,color:black});page.drawText(`${project.client||'Client not entered'}  |  Bid Date: ${project.bidDate||'Not set'}`,{x:margin,y:height-72,size:7,font,color:black});y=height-headerH-18;page.drawRectangle({x:margin,y:y-20,width:width-margin*2,height:20,color:green});let x=margin;config.headers.forEach((h,j)=>{page.drawText(h,{x:x+4,y:y-13,size:6.5,font:bold,color:white});x+=config.widths[j]});y-=20;};
- addPage();
- for(let ri=0;ri<rows.length;ri++){const vals=config.vals(rows[ri]);const lines=vals.map((v,j)=>wrap(v,config.widths[j]));const rowH=Math.max(28,...lines.map(l=>l.length*lineH+8));if(y-rowH<footerH+margin){addPage()}let x=margin;page.drawRectangle({x:margin,y:y-rowH,width:config.widths.reduce((a,b)=>a+b,0),height:rowH,color:ri%2?white:light,borderColor:line,borderWidth:.4});for(let j=0;j<vals.length;j++){page.drawRectangle({x,y:y-rowH,width:config.widths[j],height:rowH,borderColor:line,borderWidth:.35});if(kind==='checklist'&&(j===3||j===4)){const form=doc.getForm();if(j===3){const dd=form.createDropdown(`response_${ri+1}`);dd.addOptions(['Included','Excluded','Included as Alternate','Clarification Required','Not Applicable']);dd.select('Included');dd.addToPage(page,{x:x+4,y:y-rowH+5,width:config.widths[j]-8,height:rowH-10,borderWidth:.5,font,color:black})}else{const tf=form.createTextField(`reason_${ri+1}`);tf.enableMultiline();tf.addToPage(page,{x:x+4,y:y-rowH+5,width:config.widths[j]-8,height:rowH-10,borderWidth:.5,font,color:black})}}else{lines[j].forEach((ln,k)=>page.drawText(ln,{x:x+4,y:y-11-k*lineH,size:fontSize,font,color:black,maxWidth:config.widths[j]-8}))}x+=config.widths[j]}y-=rowH;}
- for(const [idx,p] of doc.getPages().entries()){p.drawText(`Prepared by ScopeLogic LLC  |  ${project.name}  |  Page ${idx+1} of ${doc.getPageCount()}`,{x:margin,y:12,size:6.5,font,color:rgb(.35,.38,.35)})}
- if(kind==='checklist')doc.getForm().updateFieldAppearances(font);
- return new Blob([await doc.save()],{type:'application/pdf'});
+async function storeFile(key: string, file: Blob) {
+  const database = await openFileDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction('files', 'readwrite');
+    transaction.objectStore('files').put(file, key);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
 }
 
-function Documents({docs,setDocs}:{docs:Doc[];setDocs:(f:(a:Doc[])=>Doc[])=>void}){const [selected,setSelected]=useState('');const d=docs.find(x=>x.id===selected)||docs[0];const add=()=>{const x:Doc={id:crypto.randomUUID(),type:'Drawings',name:'New Project Document',revision:'Bid Set',date:new Date().toISOString().slice(0,10),current:true,notes:''};setDocs(a=>[...a,x]);setSelected(x.id)};const patch=(k:keyof Doc,v:any)=>d&&setDocs(a=>a.map(x=>x.id===d.id?{...x,[k]:v}:x));return <><PageHead eyebrow="Current Project" title="Project Documents" description="Store project document metadata and revisions." action={<button className="primary" onClick={add}>+ Add Document</button>}/><div className="documents-layout"><section className="doc-list">{docs.map(x=><button key={x.id} className={d?.id===x.id?'selected':''} onClick={()=>setSelected(x.id)}><div><b>{x.name}</b><span>{x.type}</span></div><div><strong>{x.revision}</strong>{x.current&&<em>Current</em>}<span>{x.date}</span></div></button>)}</section>{d?<section className="doc-detail"><div className="doc-current"><span>{d.type}</span><h2>{d.name}</h2></div><div className="editor-grid"><Field label="Document Name" value={d.name} onChange={v=>patch('name',v)}/><Field label="Document Type" value={d.type} onChange={v=>patch('type',v)}/><Field label="Revision" value={d.revision} onChange={v=>patch('revision',v)}/><Field label="Issue Date" type="date" value={d.date} onChange={v=>patch('date',v)}/></div><TextArea label="Notes" value={d.notes} onChange={v=>patch('notes',v)}/></section>:<div className="empty-state large"><b>No documents added.</b></div>}</div></>}
-function BidLeveling(){return <><PageHead eyebrow="Optional Post-Bid Analysis" title="Bid Leveling Summary" description="Bidder-level executive evaluation remains separate from the Contractor Response Checklist."/><div className="empty-state large"><b>Bid leveling workspace retained.</b><p>This section is unchanged in the current correction release.</p></div></>}
-function ProjectLibrary({projects,active,open,add}:{projects:Project[];active:string;open:(id:string)=>void;add:()=>void}){return <><PageHead eyebrow="ScopeLogic" title="Project Library" description="Every new project begins blank at SLR-001." action={<button className="primary" onClick={add}>+ New Project</button>}/><div className="project-grid">{projects.map(p=><button key={p.id} className={`project-card ${p.id===active?'selected':''}`} onClick={()=>open(p.id)}><span className="status">{p.status}</span><h3>{p.name}</h3><p>{p.client||'Client not entered'}</p><b>Open project →</b></button>)}</div></>}
-function Dashboard({project,issues,docs,go}:{project:Project;issues:Issue[];docs:Doc[];go:(v:View)=>void}){return <><PageHead eyebrow="Project Dashboard" title={project.name} description="Submitted scope issues and current project documents."/><div className="metrics"><Metric n={issues.length} label="Submitted SLRs"/><Metric n={issues.filter(i=>i.status==='Open'||i.status==='Under Review').length} label="Open Issues"/><Metric n={issues.filter(i=>i.formalRfi).length} label="Formal RFIs"/><Metric n={docs.filter(d=>d.current).length} label="Current Documents"/></div><button className="primary" onClick={()=>go('internal')}>Open Internal Matrix</button></>}
-function ProjectSetup({project,save}:{project:Project;save:(k:keyof Project,v:string)=>void}){return <><PageHead eyebrow="Project" title="Project Setup" description="Core project information."/><div className="form-card"><Field label="Project Name" value={project.name} onChange={v=>save('name',v)}/><Field label="GC / Client" value={project.client} onChange={v=>save('client',v)}/><Field label="Bid Date" type="date" value={project.bidDate} onChange={v=>save('bidDate',v)}/><Field label="Status" value={project.status} onChange={v=>save('status',v)}/><Field label="Systems" value={project.systems} onChange={v=>save('systems',v)}/></div></>}
-function Nav({label,items,view,setView}:{label:string;items:[View,string][];view:View;setView:(v:View)=>void}){return <div className="nav-group"><span>{label}</span>{items.map(([id,name])=><button key={id} className={view===id?'active':''} onClick={()=>setView(id)}>{name}</button>)}</div>}
-function SimplePage({title,text}:{title:string;text:string}){return <><PageHead eyebrow="Internal" title={title} description={text}/><div className="empty-state large"><b>{title}</b></div></>}
-function PageHead({eyebrow,title,description,action}:{eyebrow:string;title:string;description:string;action?:React.ReactNode}){return <div className="page-head"><div><span>{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>}
-function Metric({n,label}:{n:number;label:string}){return <div className="metric"><b>{n}</b><span>{label}</span></div>}
-function Field({label,value,onChange,type='text'}:{label:string;value:string;onChange:(v:string)=>void;type?:string}){return <label className="field"><span>{label}</span><input type={type} value={value||''} onChange={e=>onChange(e.target.value)}/></label>}
-function TextArea({label,value,onChange}:{label:string;value:string;onChange:(v:string)=>void}){return <label className="field textarea"><span>{label}</span><textarea value={value||''} onChange={e=>onChange(e.target.value)}/></label>}
-function Check({label,value,change}:{label:string;value:boolean;change:(v:boolean)=>void}){return <label><input type="checkbox" checked={value} onChange={e=>change(e.target.checked)}/><span>{label}</span></label>}
+async function readStoredFile(key: string) {
+  const database = await openFileDatabase();
+  const result = await new Promise<Blob | null>((resolve, reject) => {
+    const request = database.transaction('files', 'readonly').objectStore('files').get(key);
+    request.onsuccess = () => resolve((request.result as Blob) || null);
+    request.onerror = () => reject(request.error);
+  });
+  database.close();
+  return result;
+}
+
+async function removeStoredFile(key: string) {
+  const database = await openFileDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction('files', 'readwrite');
+    transaction.objectStore('files').delete(key);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+}
+
+export default function Home() {
+  const [view, setView] = useState<View>('projects');
+  const [projects, setProjects] = useState<Project[]>([blankProject('p1')]);
+  const [projectId, setProjectId] = useState('p1');
+  const [issuesByProject, setIssuesByProject] = useState<Record<string, Issue[]>>({ p1: [] });
+  const [docsByProject, setDocsByProject] = useState<Record<string, Doc[]>>({ p1: [] });
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [selectedUid, setSelectedUid] = useState('');
+  const [draft, setDraft] = useState<Issue | null>(null);
+  const [search, setSearch] = useState('');
+  const [systemFilter, setSystemFilter] = useState('All');
+  const [statusFilter, setStatusFilter] = useState('All');
+  const [tab, setTab] = useState<'details' | 'snippets' | 'deliverables' | 'history'>('details');
+  const [mobileNav, setMobileNav] = useState(false);
+  const [pdfUrls, setPdfUrls] = useState<Partial<Record<PdfKind, string>>>({});
+  const [preview, setPreview] = useState<PreviewState>(null);
+  const [dialog, setDialog] = useState<DialogState | null>(null);
+
+  useEffect(() => {
+    const raw = localStorage.getItem('scopelogic-r14-3') || localStorage.getItem('scopelogic-r14-2');
+    if (!raw) return;
+    try {
+      const data = JSON.parse(raw);
+      const restoredProjects = (data.projects || [blankProject('p1')]).map((item: Project) => normalizeProject(item));
+      setProjects(restoredProjects);
+      setProjectId(data.projectId || restoredProjects[0]?.id || 'p1');
+      setIssuesByProject(data.issuesByProject || { p1: [] });
+      setDocsByProject(data.docsByProject || { p1: [] });
+      setTemplates(data.templates || []);
+    } catch {
+      setDialog({ kind: 'message', title: 'Saved Data Could Not Be Loaded', message: 'ScopeLogic started with a clean local workspace because the saved browser data was unreadable.' });
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('scopelogic-r14-3', JSON.stringify({ projects, projectId, issuesByProject, docsByProject, templates }));
+  }, [projects, projectId, issuesByProject, docsByProject, templates]);
+
+
+  const project = projects.find((item) => item.id === projectId) || projects[0];
+  const issues = issuesByProject[projectId] || [];
+  const docs = docsByProject[projectId] || [];
+  const setIssues = (change: (items: Issue[]) => Issue[]) => setIssuesByProject((current) => ({ ...current, [projectId]: normalizeIssues(change(current[projectId] || [])) }));
+  const setDocs = (change: (items: Doc[]) => Doc[]) => setDocsByProject((current) => ({ ...current, [projectId]: change(current[projectId] || []) }));
+  const systems = useMemo(() => ['All', ...Array.from(new Set(issues.map(systemName)))], [issues]);
+  const filtered = issues.filter((issue) =>
+    (systemFilter === 'All' || systemName(issue) === systemFilter) &&
+    (statusFilter === 'All' || issue.status === statusFilter) &&
+    `${issue.id} ${systemName(issue)} ${issue.title} ${issue.reference} ${issue.rfi}`.toLowerCase().includes(search.toLowerCase()),
+  );
+
+  const message = (title: string, body: string) => setDialog({ kind: 'message', title, message: body });
+  const confirmAction = (title: string, body: string, onConfirm: () => void | Promise<void>, confirmLabel = 'Confirm', danger = false) => setDialog({ kind: 'confirm', title, message: body, onConfirm, confirmLabel, danger });
+  const requestInput = (title: string, body: string, initialValue: string, onConfirm: (value: string) => void | Promise<void>, confirmLabel = 'Save') => setDialog({ kind: 'input', title, message: body, initialValue, onConfirm, confirmLabel });
+
+  const newDraft = (template?: Template) => {
+    const issue = blankIssue(issues.length + 1);
+    if (template) Object.assign(issue, JSON.parse(JSON.stringify(template.issue)));
+    setDraft(issue);
+    setSelectedUid('');
+    setView('internal');
+  };
+
+  const editIssue = (uid: string) => {
+    const issue = issues.find((item) => item.uid === uid);
+    if (issue) {
+      setSelectedUid(uid);
+      setDraft(cloneIssue(issue));
+    }
+  };
+
+  const submit = () => {
+    if (!draft) return;
+    if (!draft.title.trim()) return message('Scope Item Required', 'Enter a Scope Item / Short Description before submitting this SLR.');
+    if (draft.system === 'Other' && !draft.customSystem.trim()) return message('Other System Required', 'Define the custom system before submitting this SLR.');
+    if (draft.response !== 'Included' && !draft.responseReason.trim()) return message('Contractor Response Reason Required', 'A reason is required when the Contractor Response is anything other than Included.');
+    setIssues((items) => selectedUid ? items.map((item) => item.uid === selectedUid ? { ...draft, uid: selectedUid } : item) : [...items, draft]);
+    setSelectedUid(draft.uid);
+    setDraft(null);
+    setPdfUrls({});
+  };
+
+  const deleteEntry = () => {
+    if (draft && !selectedUid) {
+      return confirmAction('Discard Draft?', 'This unsubmitted draft will be discarded and no SLR number will be consumed.', () => setDraft(null), 'Discard Draft', true);
+    }
+    if (!selectedUid) return;
+    confirmAction('Delete Submitted SLR?', 'The SLR will be deleted and all later SLR, RFI, and snippet numbers will be renumbered automatically.', () => {
+      setIssues((items) => items.filter((item) => item.uid !== selectedUid));
+      setSelectedUid('');
+      setDraft(null);
+      setPdfUrls({});
+    }, 'Delete SLR', true);
+  };
+
+  const saveTemplate = () => {
+    if (!draft) return;
+    requestInput('Save SLR Template', 'Enter a reusable template name. This template will be available in every project.', draft.title || 'Saved SLR Template', (value) => {
+      const name = value.trim();
+      if (!name) return message('Template Name Required', 'Enter a name before saving the template.');
+      const { uid, id, rfi, snippet, ...issue } = draft;
+      setTemplates((items) => [...items, { uid: crypto.randomUUID(), name, issue }]);
+    }, 'Save Template');
+  };
+
+  const requestDeleteTemplate = (template: Template) => {
+    confirmAction('Delete SLR Template?', `Delete the global template "${template.name}"? This does not remove SLRs already created from it.`, () => setTemplates((items) => items.filter((item) => item.uid !== template.uid)), 'Delete Template', true);
+  };
+
+  const addProject = () => {
+    const id = `p${Date.now()}`;
+    setProjects((items) => [...items, blankProject(id)]);
+    setIssuesByProject((items) => ({ ...items, [id]: [] }));
+    setDocsByProject((items) => ({ ...items, [id]: [] }));
+    setProjectId(id);
+    setSelectedUid('');
+    setDraft(null);
+    setView('setup');
+  };
+
+  const updatePdf = async (kind: PdfKind, title: string) => {
+    const bytes = await buildPdfBytes(kind, project, issues);
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    setPdfUrls((current) => {
+      if (current[kind]) URL.revokeObjectURL(current[kind]!);
+      return { ...current, [kind]: url };
+    });
+    setPreview({ title, url, mode: 'pdf' });
+  };
+
+  return (
+    <div className="app-shell">
+      <aside className={`sidebar ${mobileNav ? 'show' : ''}`}>
+        <div className="brand"><div className="brand-mark">SL</div><div><strong>ScopeLogic</strong><span>Revision 14.3</span></div></div>
+        <button className="project-switch" onClick={() => setView('projects')}><span>Current project</span><b>{project.name}</b><small>Switch projects</small></button>
+        <Nav label="PROJECT" items={[["projects", "Project Library"], ["dashboard", "Dashboard"], ["setup", "Project Setup"]]} view={view} setView={setView} />
+        <Nav label="WORKSPACE" items={[["internal", "ScopeLogic Internal Matrix"], ["documents", "Project Documents"]]} view={view} setView={setView} />
+        <Nav label="DELIVERABLES" items={navDeliverables} view={view} setView={setView} />
+        <Nav label="ADMINISTRATION" items={[["exports", "Export Log"], ["standards", "ScopeLogic Standards"]]} view={view} setView={setView} />
+      </aside>
+      <main className="main">
+        <header className="topbar">
+          <button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)}>Menu</button>
+          <div><span>{project.client || 'ScopeLogic project'}</span><b>{project.name}</b></div>
+          <div className="top-actions"><button className="secondary" onClick={() => setView('documents')}>Documents</button><button className="primary" onClick={() => newDraft()}>+ New SLR</button></div>
+        </header>
+        <div className="page">
+          {view === 'projects' && <ProjectLibrary projects={projects} active={projectId} open={(id) => { setProjectId(id); setSelectedUid(''); setDraft(null); setView('dashboard'); }} add={addProject} />}
+          {view === 'dashboard' && <Dashboard project={project} issues={issues} docs={docs} go={setView} />}
+          {view === 'setup' && <ProjectSetup project={project} save={(key, value) => setProjects((items) => items.map((item) => item.id === projectId ? { ...item, [key]: value, modified: 'Now' } : item))} />}
+          {view === 'internal' && <InternalMatrix issues={filtered} allCount={issues.length} draft={draft} selectedUid={selectedUid} edit={editIssue} setDraft={setDraft} submit={submit} remove={deleteEntry} newDraft={newDraft} saveTemplate={saveTemplate} templates={templates} deleteTemplate={requestDeleteTemplate} search={search} setSearch={setSearch} systems={systems} systemFilter={systemFilter} setSystemFilter={setSystemFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} tab={tab} setTab={setTab} />}
+          {view === 'documents' && <Documents projectId={projectId} docs={docs} setDocs={setDocs} openPreview={setPreview} confirmAction={confirmAction} requestInput={requestInput} message={message} />}
+          {view === 'sow' && <Deliverable title="Recommended SOW Matrix" eyebrow="Primary Flagship Deliverable" description="Uses submitted Internal Matrix entries assigned to Recommended SOW." rows={issues.filter((i) => i.sow)} columns={['SLR', 'System', 'Scope Item', 'Scope Concern', 'Recommended Bid Basis', 'Reference']} values={(i) => [i.id, systemName(i), i.title, i.concern, i.basis, i.reference]} update={() => updatePdf('sow', 'Recommended SOW Matrix')} url={pdfUrls.sow} preview={(url) => setPreview({ title: 'Recommended SOW Matrix', url, mode: 'pdf' })} />}
+          {view === 'clarifications' && <Deliverable title="Clarification Matrix" eyebrow="GC Working Document" description="When an SLR is also a Formal RFI, its RFI number appears directly below the SLR number." rows={issues.filter((i) => i.clarification)} columns={['SLR / RFI', 'System', 'Question / Issue', 'Recommended Bid Basis', 'Resolution', 'Status', 'Reference']} values={(i) => [[i.id, i.rfi].filter(Boolean).join('\n'), systemName(i), i.concern, i.basis, i.resolution, i.status, i.reference]} update={() => updatePdf('clarifications', 'Clarification Matrix')} url={pdfUrls.clarifications} preview={(url) => setPreview({ title: 'Clarification Matrix', url, mode: 'pdf' })} />}
+          {view === 'rfi' && <Deliverable title="Formal RFI" eyebrow="A/E Deliverable" description="RFI numbers are generated automatically from submitted entries assigned to Formal RFI." rows={issues.filter((i) => i.formalRfi)} columns={['RFI No.', 'System', 'Question', 'Answer']} values={(i) => [i.rfi, systemName(i), i.concern, i.resolution]} update={() => updatePdf('rfi', 'Formal RFI')} url={pdfUrls.rfi} preview={(url) => setPreview({ title: 'Formal RFI', url, mode: 'pdf' })} />}
+          {view === 'checklist' && <Deliverable title="Contractor Response Checklist" eyebrow="Editable PDF" description="Every response other than Included requires a written reason. The generated PDF includes editable dropdown and multiline reason fields." rows={issues.filter((i) => i.checklist)} columns={['SLR', 'System', 'Scope Item', 'Response', 'Reason']} values={(i) => [i.id, systemName(i), i.title, i.response, i.responseReason]} update={() => updatePdf('checklist', 'Contractor Response Checklist')} url={pdfUrls.checklist} preview={(url) => setPreview({ title: 'Contractor Response Checklist', url, mode: 'pdf' })} />}
+          {view === 'leveling' && <BidLeveling />}
+          {view === 'snippets' && <Deliverable title="Snippet Register" eyebrow="Supporting Reference Document" description="Snippet numbers are generated automatically when an SLR is marked as having a snippet." rows={issues.filter((i) => i.snippet)} columns={['Snippet No.', 'SLR', 'System', 'Reference', 'Caption']} values={(i) => [i.snippet, i.id, systemName(i), i.reference, i.title]} update={() => updatePdf('snippets', 'Snippet Register')} url={pdfUrls.snippets} preview={(url) => setPreview({ title: 'Snippet Register', url, mode: 'pdf' })} />}
+          {view === 'exports' && <SimplePage title="Export Log" text="PDFs are generated from current submitted project data when Generate PDF or Update PDF is selected." />}
+          {view === 'standards' && <SimplePage title="ScopeLogic Standards" text="Projects begin blank, templates are global, entries require submission, numbering is automatic, and deliverables are generated from submitted records." />}
+        </div>
+      </main>
+      {preview && <PreviewModal preview={preview} close={() => setPreview(null)} />}
+      {dialog && <AppDialog dialog={dialog} close={() => setDialog(null)} />}
+    </div>
+  );
+}
+
+function InternalMatrix(props: any) {
+  const draft: Issue | null = props.draft;
+  const [selectedTemplate, setSelectedTemplate] = useState('');
+  const patch = (key: keyof Issue, value: unknown) => props.setDraft((current: Issue | null) => current ? { ...current, [key]: value } : current);
+  const chosenTemplate: Template | undefined = props.templates.find((template: Template) => template.uid === selectedTemplate);
+  return <>
+    <PageHead eyebrow="Primary Workspace" title="ScopeLogic Internal Matrix" description="Entries remain drafts until Submit Entry is selected. Only submitted entries feed deliverables and PDFs." action={<div className="button-row"><button className="secondary" onClick={props.remove}>{draft && !props.selectedUid ? 'Discard Draft' : 'Delete'}</button><button className="primary" onClick={() => props.newDraft()}>+ New Issue</button></div>} />
+    <div className="template-bar template-library">
+      <div><b>SLR Template Library</b><span>Global templates remain available across every project.</span></div>
+      <select value={selectedTemplate} onChange={(event) => setSelectedTemplate(event.target.value)}><option value="">{props.templates.length ? 'Select a saved SLR template...' : 'No saved templates yet'}</option>{props.templates.map((template: Template) => <option key={template.uid} value={template.uid}>{template.name}</option>)}</select>
+      <button className="secondary" disabled={!chosenTemplate} onClick={() => chosenTemplate && props.newDraft(chosenTemplate)}>Use Template</button>
+      <button className="template-delete-button" disabled={!chosenTemplate} onClick={() => chosenTemplate && props.deleteTemplate(chosenTemplate)}>Delete Template</button>
+    </div>
+    <div className="matrix-toolbar"><input placeholder="Search submitted SLRs..." value={props.search} onChange={(event) => props.setSearch(event.target.value)} /><select value={props.systemFilter} onChange={(event) => props.setSystemFilter(event.target.value)}>{props.systems.map((system: string) => <option key={system}>{system}</option>)}</select><select value={props.statusFilter} onChange={(event) => props.setStatusFilter(event.target.value)}><option>All</option>{ISSUE_STATUS_OPTIONS.map((status) => <option key={status}>{status}</option>)}</select><span>{props.allCount} submitted</span></div>
+    <div className="bluebeam-layout">
+      <section className="issue-list"><div className="list-header"><span>SLR / System</span><span>Status</span></div>{!props.issues.length && <div className="empty-list"><b>No submitted entries</b><p>Create an SLR, complete it, and select Submit Entry.</p></div>}{props.issues.map((issue: Issue) => <button key={issue.uid} className={props.selectedUid === issue.uid ? 'selected' : ''} onClick={() => props.edit(issue.uid)}><div><b>{issue.id}{issue.rfi ? ` / ${issue.rfi}` : ''}</b><span>{systemName(issue)}</span><strong>{issue.title}</strong></div><em className={`status-dot ${issue.status.toLowerCase().replaceAll(' ', '-')}`}>{issue.status}</em></button>)}</section>
+      <section className="issue-editor">
+        {!draft ? <div className="empty-state large"><b>Select a submitted SLR or create a new issue.</b><p>Editing does not affect deliverables until Submit Entry is selected.</p></div> : <>
+          <div className="draft-banner"><b>{props.selectedUid ? 'Editing submitted entry' : 'Unsubmitted draft'}</b><span>{draft.id} is provisional until submission.</span></div>
+          <div className="issue-title"><div><span>{draft.id}</span><input placeholder="Scope Item / Short Description" value={draft.title} onChange={(event) => patch('title', event.target.value)} /></div><select value={draft.status} onChange={(event) => patch('status', event.target.value)}>{ISSUE_STATUS_OPTIONS.map((status) => <option key={status}>{status}</option>)}</select></div>
+          <div className="editor-grid"><SelectField label="System" value={draft.system} options={SYSTEM_OPTIONS} onChange={(value) => patch('system', value)} />{draft.system === 'Other' && <Field label="Define Other System" value={draft.customSystem} onChange={(value) => patch('customSystem', value)} />}</div>
+          <TextArea label="Scope Concern" value={draft.concern} onChange={(value) => patch('concern', value)} />
+          <TextArea label="Recommended Bid Basis" value={draft.basis} onChange={(value) => patch('basis', value)} />
+          <TextArea label="Reason / Basis" value={draft.reason} onChange={(value) => patch('reason', value)} />
+          <Field label="Contract Reference or Scope-Gap Basis" value={draft.reference} onChange={(value) => patch('reference', value)} />
+          <div className="detail-tabs"><button className={props.tab === 'details' ? 'active' : ''} onClick={() => props.setTab('details')}>Details</button><button className={props.tab === 'snippets' ? 'active' : ''} onClick={() => props.setTab('snippets')}>Snippets</button><button className={props.tab === 'deliverables' ? 'active' : ''} onClick={() => props.setTab('deliverables')}>Deliverables</button><button className={props.tab === 'history' ? 'active' : ''} onClick={() => props.setTab('history')}>History</button></div>
+          {props.tab === 'details' && <div className="tab-panel two"><SelectField label="Contractor Response" value={draft.response} options={RESPONSE_OPTIONS} onChange={(value) => patch('response', value)} />{draft.response !== 'Included' && <Field label="Required Reason" value={draft.responseReason} onChange={(value) => patch('responseReason', value)} />}<Field label="RFI Resolution / Official Answer" value={draft.resolution} onChange={(value) => patch('resolution', value)} /></div>}
+          {props.tab === 'snippets' && <div className="tab-panel"><Check label="Create an automatically numbered snippet reference for this SLR" value={Boolean(draft.snippet)} change={(value) => patch('snippet', value ? 'pending' : '')} /><p className="help-text">The final SNP number is assigned on submission and renumbered when entries are deleted.</p></div>}
+          {props.tab === 'deliverables' && <div className="tab-panel checklist"><Check label="Recommended SOW Matrix" value={draft.sow} change={(value) => patch('sow', value)} /><Check label="Clarification Matrix" value={draft.clarification} change={(value) => patch('clarification', value)} /><Check label="Formal RFI" value={draft.formalRfi} change={(value) => patch('formalRfi', value)} /><Check label="Contractor Response Checklist" value={draft.checklist} change={(value) => patch('checklist', value)} /></div>}
+          {props.tab === 'history' && <div className="tab-panel timeline"><p><b>Draft workflow</b><span>Changes remain local until Submit Entry.</span></p></div>}
+          <div className="submit-bar"><button className="secondary" onClick={props.saveTemplate}>Save This SLR as Template</button><button className="primary" onClick={props.submit}>Submit Entry</button></div>
+        </>}
+      </section>
+    </div>
+  </>;
+}
+
+function Documents({ projectId, docs, setDocs, openPreview, confirmAction, requestInput, message }: { projectId: string; docs: Doc[]; setDocs: (change: (items: Doc[]) => Doc[]) => void; openPreview: (preview: PreviewState) => void; confirmAction: (title: string, body: string, onConfirm: () => void | Promise<void>, confirmLabel?: string, danger?: boolean) => void; requestInput: (title: string, body: string, initialValue: string, onConfirm: (value: string) => void | Promise<void>, confirmLabel?: string) => void; message: (title: string, body: string) => void }) {
+  const [folder, setFolder] = useState<'current' | 'previous'>('current');
+  const [selectedId, setSelectedId] = useState('');
+  const [uploadType, setUploadType] = useState(DOCUMENT_TYPES[0]);
+  const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
+  const uploadRef = useRef<HTMLInputElement>(null);
+  const replaceRef = useRef<HTMLInputElement>(null);
+  const selected = docs.find((doc) => doc.id === selectedId);
+  const visibleDocs = docs.filter((doc) => folder === 'current' ? doc.current : !doc.current);
+
+  useEffect(() => {
+    let active = true;
+    const created: string[] = [];
+    Promise.all(docs.map(async (doc) => {
+      const blob = await readStoredFile(`${projectId}:${doc.id}`);
+      if (!blob) return null;
+      const url = URL.createObjectURL(blob);
+      created.push(url);
+      return [doc.id, url] as const;
+    })).then((pairs) => {
+      if (!active) return;
+      setFileUrls(Object.fromEntries(pairs.filter(Boolean) as [string, string][]));
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      created.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [docs, projectId]);
+
+  useEffect(() => {
+    if (selected && ((folder === 'current' && !selected.current) || (folder === 'previous' && selected.current))) setSelectedId('');
+  }, [folder, selected]);
+
+  const fileKey = (id: string) => `${projectId}:${id}`;
+  const uploadFiles = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!files.length) return;
+    const additions: Doc[] = [];
+    for (const file of files) {
+      const id = crypto.randomUUID();
+      await storeFile(fileKey(id), file);
+      additions.push({ id, type: uploadType, name: file.name.replace(/\.[^.]+$/, ''), revision: 'Current', date: new Date().toISOString().slice(0, 10), current: true, notes: '', fileName: file.name, fileType: file.type || 'application/octet-stream', sizeBytes: file.size });
+    }
+    setDocs((items) => [...items, ...additions]);
+    setFolder('current');
+    setSelectedId(additions[additions.length - 1].id);
+  };
+
+  const replaceFile = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !selected) return;
+    requestInput('Replace Document Revision', 'Enter the revision name for the new current document. The existing file will move to Previous Documents.', nextRevision(selected.revision), async (revision) => {
+      const id = crypto.randomUUID();
+      await storeFile(fileKey(id), file);
+      const replacement: Doc = { ...selected, id, revision: revision.trim() || nextRevision(selected.revision), date: new Date().toISOString().slice(0, 10), current: true, fileName: file.name, fileType: file.type || 'application/octet-stream', sizeBytes: file.size };
+      setDocs((items) => [...items.map((doc) => doc.id === selected.id ? { ...doc, current: false } : doc), replacement]);
+      setFolder('current');
+      setSelectedId(id);
+    }, 'Replace Revision');
+  };
+
+  const deleteSelected = () => {
+    if (!selected) return;
+    confirmAction('Delete Project Document?', `Delete "${selected.fileName}" from this project?`, async () => {
+      await removeStoredFile(fileKey(selected.id));
+      setDocs((items) => items.filter((doc) => doc.id !== selected.id));
+      setSelectedId('');
+    }, 'Delete Document', true);
+  };
+
+  const openDocument = (doc: Doc) => {
+    const url = fileUrls[doc.id];
+    if (!url) return message('File Not Available', 'The file data could not be found in this browser. Upload the document again.');
+    if (doc.fileType === 'application/pdf') return openPreview({ title: doc.fileName, url, mode: 'pdf' });
+    if (doc.fileType.startsWith('image/')) return openPreview({ title: doc.fileName, url, mode: 'image' });
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const openSelected = () => {
+    if (selected) openDocument(selected);
+  };
+
+  const patch = (key: keyof Doc, value: string) => selected && setDocs((items) => items.map((doc) => doc.id === selected.id ? { ...doc, [key]: value } : doc));
+
+  return <>
+    <PageHead eyebrow="Current Project" title="Project Documents" description="Current documents remain at the project root. Superseded revisions are retained in the Previous Documents folder." action={<div className="document-upload-controls"><SelectField label="Document Type" value={uploadType} options={DOCUMENT_TYPES} onChange={setUploadType} compact /><button className="primary" onClick={() => uploadRef.current?.click()}>Upload Documents</button><input ref={uploadRef} hidden type="file" multiple accept=".pdf,.dwg,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.tif,.tiff" onChange={uploadFiles} /></div>} />
+    <div className="explorer-shell">
+      <aside className="folder-tree"><div className="folder-tree-title">Folders</div><button className={folder === 'current' ? 'active' : ''} onClick={() => setFolder('current')}><span className="folder-icon">P</span><div><b>Project Documents</b><small>{docs.filter((doc) => doc.current).length} current files</small></div></button><button className={folder === 'previous' ? 'active nested' : 'nested'} onClick={() => setFolder('previous')}><span className="folder-icon">F</span><div><b>Previous Documents</b><small>{docs.filter((doc) => !doc.current).length} prior files</small></div></button></aside>
+      <section className="file-explorer">
+        <div className="explorer-toolbar"><div><b>{folder === 'current' ? 'Project Documents' : 'Previous Documents'}</b><span>{visibleDocs.length} item{visibleDocs.length === 1 ? '' : 's'}</span></div><div className="button-row"><button className="secondary" disabled={!selected} onClick={openSelected}>Open / Preview</button><button className="secondary" disabled={!selected?.current} onClick={() => replaceRef.current?.click()}>Replace Revision</button><input ref={replaceRef} hidden type="file" accept=".pdf,.dwg,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.tif,.tiff" onChange={replaceFile} />{selected && fileUrls[selected.id] ? <a className="secondary link-button" href={fileUrls[selected.id]} download={selected.fileName}>Download</a> : <button className="secondary" disabled>Download</button>}<button className="danger-button" disabled={!selected} onClick={deleteSelected}>Delete</button></div></div>
+        <div className="file-table"><div className="file-row file-head"><span>Name</span><span>Type</span><span>Revision</span><span>Date</span><span>Size</span></div>{visibleDocs.map((doc) => <button className={`file-row ${selectedId === doc.id ? 'selected' : ''}`} key={doc.id} onClick={() => setSelectedId(doc.id)} onDoubleClick={() => openDocument(doc)}><span className="file-name"><i>{documentIcon(doc)}</i><b>{doc.fileName}</b></span><span>{doc.type}</span><span>{doc.revision}</span><span>{doc.date}</span><span>{formatBytes(doc.sizeBytes)}</span></button>)}{!visibleDocs.length && <div className="empty-folder"><b>{folder === 'current' ? 'No current project documents' : 'No previous documents'}</b><p>{folder === 'current' ? 'Choose a document type and upload one or more files.' : 'Previous revisions appear here after Replace Revision is used.'}</p></div>}</div>
+        {selected && <div className="file-properties"><div className="properties-title"><div><span>{selected.current ? 'Current document' : 'Previous document'}</span><h2>{selected.fileName}</h2></div></div><div className="editor-grid"><Field label="Display Name" value={selected.name} onChange={(value) => patch('name', value)} /><SelectField label="Document Type" value={selected.type} options={DOCUMENT_TYPES} onChange={(value) => patch('type', value)} /><Field label="Revision" value={selected.revision} onChange={(value) => patch('revision', value)} /><Field label="Issue Date" type="date" value={selected.date} onChange={(value) => patch('date', value)} /></div><TextArea label="Notes" value={selected.notes} onChange={(value) => patch('notes', value)} /></div>}
+      </section>
+    </div>
+  </>;
+}
+
+function nextRevision(value: string) {
+  const match = value.match(/(\d+)\s*$/);
+  if (match) return value.replace(/\d+\s*$/, String(Number(match[1]) + 1));
+  return value.toLowerCase() === 'current' ? 'Revision 1' : `${value} - Revision 1`;
+}
+function documentIcon(doc: Doc) {
+  if (doc.fileType === 'application/pdf') return 'PDF';
+  if (doc.fileType.startsWith('image/')) return 'IMG';
+  if (/word|document/.test(doc.fileType) || /\.docx?$/i.test(doc.fileName)) return 'DOC';
+  if (/sheet|excel/.test(doc.fileType) || /\.xlsx?$/i.test(doc.fileName)) return 'XLS';
+  if (/\.dwg$/i.test(doc.fileName)) return 'DWG';
+  return 'FILE';
+}
+function formatBytes(bytes: number) {
+  if (!bytes) return '-';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function Deliverable({ title, eyebrow, description, rows, columns, values, update, url, preview }: { title: string; eyebrow: string; description: string; rows: Issue[]; columns: string[]; values: (issue: Issue) => string[]; update: () => void; url?: string; preview: (url: string) => void }) {
+  return <><PageHead eyebrow={eyebrow} title={title} description={description} action={<div className="button-row"><button className="secondary" onClick={update}>{url ? 'Update PDF' : 'Generate PDF'}</button><button className="secondary" disabled={!url} onClick={() => url && preview(url)}>Preview</button>{url ? <a className="primary link-button" href={url} download={`${title.replaceAll(' ', '_')}.pdf`}>Download PDF</a> : <button className="primary" disabled>Download PDF</button>}</div>} /><div className="sync-note">PDF status: <b>{url ? 'Generated from current submitted entries' : 'Not generated'}</b>. Select Update PDF after changing deliverable assignments or submitted entries.</div><div className="matrix-export"><div className="matrix-table"><div className="matrix-row head" style={{ gridTemplateColumns: `repeat(${columns.length},minmax(120px,1fr))` }}>{columns.map((column) => <b key={column}>{column}</b>)}</div>{rows.length ? rows.map((issue) => <div className="matrix-row" key={issue.uid} style={{ gridTemplateColumns: `repeat(${columns.length},minmax(120px,1fr))` }}>{values(issue).map((value, index) => <span key={index}>{value || '-'}</span>)}</div>) : <div className="empty-state"><b>No submitted entries assigned</b><p>Assign an SLR to this deliverable and submit it from the Internal Matrix.</p></div>}</div></div></>;
+}
+
+function ProjectSetup({ project, save }: { project: Project; save: (key: keyof Project, value: string | string[]) => void }) {
+  return <><PageHead eyebrow="Project" title="Project Setup" description="Core project information and project-level system selection." /><div className="form-card"><Field label="Project Name" value={project.name} onChange={(value) => save('name', value)} /><Field label="GC / Client" value={project.client} onChange={(value) => save('client', value)} /><Field label="Bid Date" type="date" value={project.bidDate} onChange={(value) => save('bidDate', value)} /><Field label="Revision" value={project.revision} onChange={(value) => save('revision', value)} /><SelectField label="Status" value={project.status} options={PROJECT_STATUS_OPTIONS} onChange={(value) => save('status', value)} /><MultiSelectField label="Systems" values={project.systems} options={SYSTEM_OPTIONS} onChange={(value) => save('systems', value)} /></div></>;
+}
+
+function MultiSelectField({ label, values, options, onChange }: { label: string; values: string[]; options: string[]; onChange: (values: string[]) => void }) {
+  const [open, setOpen] = useState(false);
+  const toggle = (option: string) => onChange(values.includes(option) ? values.filter((value) => value !== option) : [...values, option]);
+  return <label className="field multiselect-field"><span>{label}</span><button type="button" className="multiselect-trigger" onClick={() => setOpen(!open)}>{values.length ? values.join(', ') : 'Select systems'}<b>{open ? 'Close' : 'Open'}</b></button>{open && <div className="multiselect-menu">{options.map((option) => <label key={option}><input type="checkbox" checked={values.includes(option)} onChange={() => toggle(option)} /><span>{option}</span></label>)}<button type="button" className="secondary" onClick={() => setOpen(false)}>Done</button></div>}</label>;
+}
+
+function AppDialog({ dialog, close }: { dialog: DialogState; close: () => void }) {
+  const [value, setValue] = useState(dialog.kind === 'input' ? dialog.initialValue : '');
+  useEffect(() => setValue(dialog.kind === 'input' ? dialog.initialValue : ''), [dialog]);
+  const confirm = async () => {
+    if (dialog.kind === 'message') return close();
+    if (dialog.kind === 'confirm') await dialog.onConfirm();
+    if (dialog.kind === 'input') await dialog.onConfirm(value);
+    close();
+  };
+  return <div className="dialog-backdrop" role="presentation"><div className="app-dialog" role="dialog" aria-modal="true"><div className="dialog-title"><b>{dialog.title}</b><button onClick={close}>Close</button></div><p>{dialog.message}</p>{dialog.kind === 'input' && <input autoFocus value={value} placeholder={dialog.placeholder} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && confirm()} />}<div className="dialog-actions">{dialog.kind !== 'message' && <button className="secondary" onClick={close}>Cancel</button>}<button className={dialog.kind === 'confirm' && dialog.danger ? 'danger-button' : 'primary'} disabled={dialog.kind === 'input' && !value.trim()} onClick={confirm}>{dialog.confirmLabel || (dialog.kind === 'message' ? 'OK' : 'Confirm')}</button></div></div></div>;
+}
+
+function PreviewModal({ preview, close }: { preview: NonNullable<PreviewState>; close: () => void }) {
+  return <div className="modal"><div className="modal-card"><div className="modal-head"><b>{preview.title}</b><button onClick={close}>Close</button></div>{preview.mode === 'image' ? <div className="image-preview"><img src={preview.url} alt={preview.title} /></div> : <iframe src={preview.url} title={preview.title} />}</div></div>;
+}
+
+function BidLeveling() { return <><PageHead eyebrow="Optional Post-Bid Analysis" title="Bid Leveling Summary" description="Bidder-level executive evaluation remains separate from the Contractor Response Checklist." /><div className="empty-state large"><b>Bid leveling workspace retained.</b><p>This section remains available for bidder strengths, weaknesses, risk, commercial concerns, and recommendation.</p></div></>; }
+function ProjectLibrary({ projects, active, open, add }: { projects: Project[]; active: string; open: (id: string) => void; add: () => void }) { return <><PageHead eyebrow="ScopeLogic" title="Project Library" description="Every new project begins blank at SLR-001." action={<button className="primary" onClick={add}>+ New Project</button>} /><div className="project-grid">{projects.map((project) => <button key={project.id} className={`project-card ${project.id === active ? 'selected' : ''}`} onClick={() => open(project.id)}><span className="status">{project.status}</span><h3>{project.name}</h3><p>{project.client || 'Client not entered'}</p><b>Open project</b></button>)}</div></>; }
+function Dashboard({ project, issues, docs, go }: { project: Project; issues: Issue[]; docs: Doc[]; go: (view: View) => void }) { return <><PageHead eyebrow="Project Dashboard" title={project.name} description="Submitted scope issues and current project documents." /><div className="metrics"><Metric n={issues.length} label="Submitted SLRs" /><Metric n={issues.filter((issue) => issue.status === 'Open' || issue.status === 'Under Review').length} label="Open Issues" /><Metric n={issues.filter((issue) => issue.formalRfi).length} label="Formal RFIs" /><Metric n={docs.filter((doc) => doc.current).length} label="Current Documents" /></div><button className="primary" onClick={() => go('internal')}>Open Internal Matrix</button></>; }
+function Nav({ label, items, view, setView }: { label: string; items: [View, string][]; view: View; setView: (view: View) => void }) { return <div className="nav-group"><span>{label}</span>{items.map(([id, name]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}>{name}</button>)}</div>; }
+function SimplePage({ title, text }: { title: string; text: string }) { return <><PageHead eyebrow="Internal" title={title} description={text} /><div className="empty-state large"><b>{title}</b></div></>; }
+function PageHead({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) { return <div className="page-head"><div><span>{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>; }
+function Metric({ n, label }: { n: number; label: string }) { return <div className="metric"><b>{n}</b><span>{label}</span></div>; }
+function Field({ label, value, onChange, type = 'text' }: { label: string; value: string; onChange: (value: string) => void; type?: string }) { return <label className="field"><span>{label}</span><input type={type} value={value || ''} onChange={(event) => onChange(event.target.value)} /></label>; }
+function SelectField({ label, value, options, onChange, compact = false }: { label: string; value: string; options: string[]; onChange: (value: string) => void; compact?: boolean }) { return <label className={`field select-field ${compact ? 'compact' : ''}`}><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>; }
+function TextArea({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) { return <label className="field textarea"><span>{label}</span><textarea value={value || ''} onChange={(event) => onChange(event.target.value)} /></label>; }
+function Check({ label, value, change }: { label: string; value: boolean; change: (value: boolean) => void }) { return <label><input type="checkbox" checked={value} onChange={(event) => change(event.target.checked)} /><span>{label}</span></label>; }
