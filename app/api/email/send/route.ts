@@ -40,12 +40,16 @@ export async function POST(request: Request) {
     if (!subject) return NextResponse.json({ error: 'A subject is required.' }, { status: 400 });
     if (!attachmentBase64) return NextResponse.json({ error: 'The PDF attachment is missing.' }, { status: 400 });
 
-    const allowed = String(process.env.SCOPELOGIC_ALLOWED_FROM_EMAILS || '')
+    const environmentApproved = String(process.env.SCOPELOGIC_ALLOWED_FROM_EMAILS || '')
       .split(',')
       .map((item) => addressOnly(item))
       .filter(Boolean);
-    if (allowed.length && !allowed.includes(addressOnly(from))) {
-      return NextResponse.json({ error: 'The selected From address is not included in SCOPELOGIC_ALLOWED_FROM_EMAILS.' }, { status: 400 });
+    const appApproved = Array.isArray(body.approvedFrom)
+      ? body.approvedFrom.map((item: unknown) => addressOnly(String(item || ''))).filter(Boolean)
+      : [];
+    const approved = Array.from(new Set([addressOnly(configuredDefault), ...environmentApproved, ...appApproved].filter(Boolean)));
+    if (requestedFrom && approved.length && !approved.includes(addressOnly(requestedFrom))) {
+      return NextResponse.json({ error: 'The selected From address is not included in the approved sender list saved in the app.' }, { status: 400 });
     }
 
     const resend = new Resend(process.env.RESEND_API_KEY);

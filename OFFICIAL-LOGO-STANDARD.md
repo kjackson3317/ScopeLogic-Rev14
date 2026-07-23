@@ -1,7 +1,7 @@
 # ScopeLogic Official Logo Standard
 
 **Status:** Official
-**Effective revision:** ScopeLogic Revision 14.5
+**Effective revision:** ScopeLogic Revision 14.5 and later
 **Company:** ScopeLogic LLC
 **Tagline:** Identify. Clarify. Rectify.
 

@@ -392,7 +392,7 @@ async function appendDeliverable(
     let firstFragment = true;
 
     while (offsets.some((offset, index) => offset < allLines[index].length)) {
-      const minimumRowHeight = kind === 'checklist' && firstFragment ? 66 : 28;
+      const minimumRowHeight = kind === 'checklist' && firstFragment ? 34 : 28;
       if (y - minimumRowHeight < footerLimit) addPage();
       const availableHeight = y - footerLimit;
       const linesFit = Math.max(1, Math.floor((availableHeight - 8) / lineHeight));
@@ -433,7 +433,7 @@ export async function buildPdfBytes(kind: PdfKind, project: PdfProject, issues: 
   return document.save();
 }
 
-export async function buildReleasePackageBytes(project: PdfProject, issues: PdfIssue[]) {
+export async function buildReleasePackageBytes(project: PdfProject, issues: PdfIssue[], selectedKinds: PdfKind[] = ['sow', 'clarifications', 'rfi', 'checklist', 'snippets'], releaseNotes = '') {
   const output = await PDFDocument.create();
   const font = await output.embedFont(StandardFonts.Helvetica);
   const bold = await output.embedFont(StandardFonts.HelveticaBold);
@@ -467,17 +467,24 @@ export async function buildReleasePackageBytes(project: PdfProject, issues: PdfI
   page.drawText(project.versionDate || 'Not set', { x: 310, y: height - 520, size: 13, font: bold, color: black });
 
   page.drawText('Included Deliverables', { x: 48, y: height - 585, size: 12, font: bold, color: black });
-  const titles = ['Recommended SOW Matrix', 'Clarification Matrix', 'Formal RFI', 'Contractor Response Checklist', 'Snippet Register'];
+  const titles = selectedKinds.map((kind) => configFor(kind).title);
   titles.forEach((title, index) => {
     const itemY = height - 616 - index * 25;
     page.drawRectangle({ x: 50, y: itemY - 3, width: 9, height: 9, color: mediumGreen });
-    page.drawText(title, { x: 70, y: itemY, size: 9, font, color: black });
+    const titleFit = fitText(title, font, 9, 220, 7);
+    page.drawText(titleFit.text, { x: 70, y: itemY, size: titleFit.size, font, color: black });
   });
+  if (safe(releaseNotes).trim()) {
+    const noteX = 332;
+    const noteTop = height - 585;
+    page.drawText('Release Note', { x: noteX, y: noteTop, size: 8, font: bold, color: mediumGreen });
+    const noteLines = wrapText(releaseNotes, width - noteX - 48, font, 8).slice(0, 10);
+    drawWrapped(page, noteLines, noteX, noteTop - 17, font, 8, 11, black);
+  }
   page.drawLine({ start: { x: 48, y: 62 }, end: { x: width - 48, y: 62 }, thickness: 0.5, color: mediumGreen });
   page.drawText('Prepared by ScopeLogic LLC | Confidential', { x: 48, y: 42, size: 7, font, color: muted });
 
-  const kinds: PdfKind[] = ['sow', 'clarifications', 'rfi', 'checklist', 'snippets'];
-  for (const kind of kinds) {
+  for (const kind of selectedKinds) {
     await appendDeliverable(output, kind, project, issues, brand, `release_${kind}`);
   }
   return output.save();

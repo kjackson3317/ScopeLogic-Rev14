@@ -7,6 +7,8 @@ type Project = {
   id: string;
   name: string;
   client: string;
+  customerId: string;
+  contactIds: string[];
   versionDate: string;
   status: string;
   systems: string[];
@@ -33,6 +35,33 @@ type CalendarEntry = {
   title: string;
   type: string;
   projectId: string;
+};
+
+type CustomerContact = {
+  id: string;
+  name: string;
+  title: string;
+  email: string;
+  phone: string;
+};
+
+type Customer = {
+  id: string;
+  name: string;
+  address1: string;
+  address2: string;
+  city: string;
+  state: string;
+  zip: string;
+  website: string;
+  notes: string;
+  contacts: CustomerContact[];
+};
+
+type ReleaseSelection = {
+  mode: 'download' | 'email';
+  kinds: PdfKind[];
+  notes: string;
 };
 
 type Issue = {
@@ -72,7 +101,7 @@ type Doc = {
   sizeBytes: number;
 };
 type ExportEntry = { id: string; fileName: string; deliverable: string; downloadedAt: string; projectRevision: string };
-type View = 'projects' | 'dashboard' | 'setup' | 'internal' | 'documents' | 'notes' | 'sow' | 'clarifications' | 'rfi' | 'checklist' | 'leveling' | 'snippets' | 'exports' | 'email' | 'standards';
+type View = 'projects' | 'dashboard' | 'setup' | 'internal' | 'documents' | 'notes' | 'sow' | 'clarifications' | 'rfi' | 'checklist' | 'leveling' | 'snippets' | 'customers' | 'exports' | 'email' | 'standards';
 type DialogState =
   | { kind: 'message'; title: string; message: string; confirmLabel?: string }
   | { kind: 'confirm'; title: string; message: string; confirmLabel?: string; danger?: boolean; onConfirm: () => void | Promise<void> }
@@ -125,7 +154,9 @@ const blankContract = (): ContractDetails => ({
   notes: '',
 });
 
-const blankProject = (id: string): Project => ({ id, name: 'New ScopeLogic Project', client: '', versionDate: new Date().toISOString().slice(0, 10), status: 'Planning', systems: [], revision: 'Rev 0', modified: 'Now', contract: blankContract() });
+const blankProject = (id: string): Project => ({ id, name: 'New ScopeLogic Project', client: '', customerId: '', contactIds: [], versionDate: new Date().toISOString().slice(0, 10), status: 'Planning', systems: [], revision: 'Rev 0', modified: 'Now', contract: blankContract() });
+const blankCustomer = (): Customer => ({ id: crypto.randomUUID(), name: '', address1: '', address2: '', city: '', state: '', zip: '', website: '', notes: '', contacts: [] });
+const blankCustomerContact = (): CustomerContact => ({ id: crypto.randomUUID(), name: '', title: '', email: '', phone: '' });
 const blankIssue = (number: number): Issue => ({ uid: crypto.randomUUID(), id: `SLR-${String(number).padStart(3, '0')}`, system: 'Structured Cabling', customSystem: '', title: '', status: 'Open', concern: '', rfiQuestion: '', basis: '', reason: '', reference: '', rfi: '', resolution: '', snippet: '', sow: true, clarification: true, formalRfi: false, checklist: true, response: 'Included', responseReason: '' });
 const cloneIssue = (issue: Issue): Issue => JSON.parse(JSON.stringify(issue));
 const systemName = (issue: Issue) => (issue.system === 'Other' ? issue.customSystem || 'Other' : issue.system);
@@ -144,6 +175,8 @@ const normalizeProject = (project: Partial<Project> & { id: string } & { bidDate
   ...project,
   versionDate: project.versionDate || project.bidDate || new Date().toISOString().slice(0, 10),
   systems: Array.isArray(project.systems) ? project.systems : String(project.systems || '').split(',').map((item) => item.trim()).filter(Boolean),
+  customerId: project.customerId || '',
+  contactIds: Array.isArray(project.contactIds) ? project.contactIds : [],
   revision: project.revision || 'Rev 0',
   contract: { ...blankContract(), ...(project.contract || {}) },
 });
@@ -205,6 +238,15 @@ const navDeliverables: [View, string][] = [
   ['leveling', 'Bid Leveling Summary'],
   ['snippets', 'Snippet Register'],
 ];
+
+const RELEASE_OPTIONS: { kind: PdfKind; label: string }[] = [
+  { kind: 'sow', label: 'Recommended SOW Matrix' },
+  { kind: 'clarifications', label: 'Clarification Matrix' },
+  { kind: 'rfi', label: 'Formal RFI' },
+  { kind: 'checklist', label: 'Contractor Response Checklist' },
+  { kind: 'snippets', label: 'Snippet Register' },
+];
+const ALL_RELEASE_KINDS = RELEASE_OPTIONS.map((item) => item.kind);
 
 function openFileDatabase() {
   return new Promise<IDBDatabase>((resolve, reject) => {
@@ -274,9 +316,11 @@ export default function Home() {
   const [emailDraft, setEmailDraft] = useState<EmailDraft | null>(null);
   const [emailSending, setEmailSending] = useState(false);
   const [calendarEntries, setCalendarEntries] = useState<CalendarEntry[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [releaseSelection, setReleaseSelection] = useState<ReleaseSelection | null>(null);
 
   useEffect(() => {
-    const raw = localStorage.getItem('scopelogic-r14-6') || localStorage.getItem('scopelogic-r14-5') || localStorage.getItem('scopelogic-r14-4') || localStorage.getItem('scopelogic-r14-3') || localStorage.getItem('scopelogic-r14-2');
+    const raw = localStorage.getItem('scopelogic-r14-7') || localStorage.getItem('scopelogic-r14-6') || localStorage.getItem('scopelogic-r14-5') || localStorage.getItem('scopelogic-r14-4') || localStorage.getItem('scopelogic-r14-3') || localStorage.getItem('scopelogic-r14-2');
     if (!raw) return;
     try {
       const data = JSON.parse(raw);
@@ -291,14 +335,15 @@ export default function Home() {
       setExportsByProject(data.exportsByProject || { p1: [] });
       setEmailSettings(data.emailSettings || { defaultFrom: '', additionalFrom: [], replyTo: '' });
       setCalendarEntries(data.calendarEntries || []);
+      setCustomers(data.customers || []);
     } catch {
       setDialog({ kind: 'message', title: 'Saved Data Could Not Be Loaded', message: 'ScopeLogic started with a clean local workspace because the saved browser data was unreadable.' });
     }
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('scopelogic-r14-6', JSON.stringify({ projects, projectId, issuesByProject, docsByProject, templates, notesByProject, exportsByProject, emailSettings, calendarEntries }));
-  }, [projects, projectId, issuesByProject, docsByProject, templates, notesByProject, exportsByProject, emailSettings, calendarEntries]);
+    localStorage.setItem('scopelogic-r14-7', JSON.stringify({ projects, projectId, issuesByProject, docsByProject, templates, notesByProject, exportsByProject, emailSettings, calendarEntries, customers }));
+  }, [projects, projectId, issuesByProject, docsByProject, templates, notesByProject, exportsByProject, emailSettings, calendarEntries, customers]);
 
 
   const project = projects.find((item) => item.id === projectId) || projects[0];
@@ -341,10 +386,12 @@ export default function Home() {
     if (draft.system === 'Other' && !draft.customSystem.trim()) return message('Other System Required', 'Define the custom system before submitting this SLR.');
     if (draft.formalRfi && !draft.rfiQuestion.trim()) return message('RFI Question Required', 'Enter the formal RFI question before submitting an SLR assigned to Formal RFI.');
     if (draft.response !== 'Included' && !draft.responseReason.trim()) return message('Contractor Response Reason Required', 'A reason is required when the Contractor Response is anything other than Included.');
+    const savedId = draft.id;
     setIssues((items) => selectedUid ? items.map((item) => item.uid === selectedUid ? { ...draft, uid: selectedUid } : item) : [...items, draft]);
     setSelectedUid(draft.uid);
     setDraft(null);
     setPdfUrls({});
+    message('Saved', `${savedId} was submitted to the Internal Matrix.`);
   };
 
   const deleteEntry = () => {
@@ -367,6 +414,7 @@ export default function Home() {
       if (!name) return message('Template Name Required', 'Enter a name before saving the template.');
       const { uid, id, rfi, snippet, ...issue } = draft;
       setTemplates((items) => [...items, { uid: crypto.randomUUID(), name, issue }]);
+      message('Saved', `The global SLR template "${name}" was saved.`);
     }, 'Save Template');
   };
 
@@ -409,9 +457,10 @@ export default function Home() {
 
   const releaseFileName = () => `${project.name.replace(/[^a-z0-9]+/gi, '_') || 'ScopeLogic'}_${project.revision.replace(/[^a-z0-9]+/gi, '_')}_Official_Release.pdf`;
 
-  const downloadReleasePackage = async () => {
+  const downloadReleasePackage = async (kinds: PdfKind[] = ALL_RELEASE_KINDS, notes = '') => {
     try {
-      const bytes = await buildReleasePackageBytes(project, issues);
+      if (!kinds.length) return message('Select Deliverables', 'Choose at least one deliverable for the official release.');
+      const bytes = await buildReleasePackageBytes(project, issues, kinds, notes);
       const blob = new Blob([bytes], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);
       const fileName = releaseFileName();
@@ -423,14 +472,15 @@ export default function Home() {
       anchor.remove();
       recordDownload(fileName, 'Official GC Release Package');
       setTimeout(() => URL.revokeObjectURL(url), 3000);
+      message('Saved', 'The selected official GC release package was generated and downloaded.');
     } catch (error) {
       message('Official Release Failed', error instanceof Error ? error.message : 'The combined PDF package could not be generated.');
     }
   };
 
-  const prepareEmail = async (kind: PdfKind | 'release', deliverable: string) => {
+  const prepareEmail = async (kind: PdfKind | 'release', deliverable: string, releaseKinds: PdfKind[] = ALL_RELEASE_KINDS, releaseNotes = '') => {
     try {
-      const bytes = kind === 'release' ? await buildReleasePackageBytes(project, issues) : await buildPdfBytes(kind, project, issues);
+      const bytes = kind === 'release' ? await buildReleasePackageBytes(project, issues, releaseKinds, releaseNotes) : await buildPdfBytes(kind, project, issues);
       const filename = kind === 'release' ? releaseFileName() : `${deliverable.replace(/[^a-z0-9]+/gi, '_')}.pdf`;
       setEmailDraft({
         filename,
@@ -458,6 +508,7 @@ export default function Home() {
           to: parseAddresses(draftToSend.to),
           cc: parseAddresses(draftToSend.cc),
           replyTo: emailSettings.replyTo,
+          approvedFrom: Array.from(new Set([emailSettings.defaultFrom, ...emailSettings.additionalFrom].filter(Boolean))),
         }),
       });
       const result = await response.json().catch(() => ({}));
@@ -474,23 +525,23 @@ export default function Home() {
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileNav ? 'show' : ''}`}>
-        <div className="brand"><div className="brand-mark"><img src="/brand/scopelogic-logo-mark.png" alt="ScopeLogic" /></div><div><div className="brand-name-box"><img className="brand-wordmark" src="/brand/scopelogic-wordmark.png" alt="ScopeLogic" /></div><span>Revision 14.6</span></div></div>
+        <div className="brand"><div className="brand-mark"><img src="/brand/scopelogic-logo-mark.png" alt="ScopeLogic" /></div><div><div className="brand-name-box"><img className="brand-wordmark" src="/brand/scopelogic-wordmark.png" alt="ScopeLogic" /></div><span>Revision 14.7</span></div></div>
         <button className="project-switch" onClick={() => setView('projects')}><span>Current project</span><b>{project.name}</b><small>Switch projects</small></button>
         <Nav label="PROJECT" items={[["projects", "Project Library"], ["dashboard", "Dashboard"], ["setup", "Project Setup"]]} view={view} setView={setView} />
         <Nav label="WORKSPACE" items={[["internal", "ScopeLogic Internal Matrix"], ["documents", "Project Documents"], ["notes", "Internal Notes"]]} view={view} setView={setView} />
         <Nav label="DELIVERABLES" items={navDeliverables} view={view} setView={setView} />
-        <Nav label="ADMINISTRATION" items={[["exports", "Export Log"], ["email", "Email Settings"], ["standards", "ScopeLogic Standards"]]} view={view} setView={setView} />
+        <Nav label="ADMINISTRATION" items={[["customers", "Customer Database"], ["exports", "Export Log"], ["email", "Email Settings"], ["standards", "ScopeLogic Standards"]]} view={view} setView={setView} />
       </aside>
       <main className="main">
         <header className="topbar">
           <button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)}>Menu</button>
           <div><span>{project.client || 'ScopeLogic project'}</span><b>{project.name}</b></div>
-          <div className="top-actions"><button className="secondary" onClick={downloadReleasePackage}>Generate All PDFs</button><button className="secondary" onClick={() => prepareEmail('release', 'Official GC Release Package')}>Email All PDFs</button><button className="secondary" onClick={() => setView('documents')}>Documents</button><button className="primary" onClick={() => newDraft()}>+ New SLR</button></div>
+          <div className="top-actions"><button className="secondary" onClick={() => setReleaseSelection({ mode: 'download', kinds: [...ALL_RELEASE_KINDS], notes: '' })}>Generate All PDFs</button><button className="secondary" onClick={() => setReleaseSelection({ mode: 'email', kinds: [...ALL_RELEASE_KINDS], notes: '' })}>Email All PDFs</button><button className="secondary" onClick={() => setView('documents')}>Documents</button><button className="primary" onClick={() => newDraft()}>+ New SLR</button></div>
         </header>
         <div className="page">
-          {view === 'projects' && <ProjectLibrary projects={projects} active={projectId} entries={calendarEntries} open={(id) => { setProjectId(id); setSelectedUid(''); setDraft(null); setView('dashboard'); }} add={addProject} addEntry={(entry) => setCalendarEntries((items) => [...items, entry])} deleteEntry={(id) => setCalendarEntries((items) => items.filter((item) => item.id !== id))} />}
-          {view === 'dashboard' && <Dashboard project={project} issues={issues} docs={docs} go={setView} generateAll={downloadReleasePackage} emailAll={() => prepareEmail('release', 'Official GC Release Package')} saveContract={(contract) => setProjects((items) => items.map((item) => item.id === projectId ? { ...item, contract, modified: 'Now' } : item))} message={message} />}
-          {view === 'setup' && <ProjectSetup project={project} save={(key, value) => setProjects((items) => items.map((item) => item.id === projectId ? { ...item, [key]: value, modified: 'Now' } : item))} />}
+          {view === 'projects' && <ProjectLibrary projects={projects} active={projectId} entries={calendarEntries} open={(id) => { setProjectId(id); setSelectedUid(''); setDraft(null); setView('dashboard'); }} add={addProject} addEntry={(entry) => setCalendarEntries((items) => [...items, entry])} deleteEntry={(id) => setCalendarEntries((items) => items.filter((item) => item.id !== id))} message={message} />}
+          {view === 'dashboard' && <Dashboard project={project} issues={issues} docs={docs} customers={customers} go={setView} generateAll={() => setReleaseSelection({ mode: 'download', kinds: [...ALL_RELEASE_KINDS], notes: '' })} emailAll={() => setReleaseSelection({ mode: 'email', kinds: [...ALL_RELEASE_KINDS], notes: '' })} saveContract={(contract) => setProjects((items) => items.map((item) => item.id === projectId ? { ...item, contract, modified: 'Now' } : item))} saveContacts={(contactIds) => setProjects((items) => items.map((item) => item.id === projectId ? { ...item, contactIds, modified: 'Now' } : item))} message={message} />}
+          {view === 'setup' && <ProjectSetup project={project} customers={customers} save={(updated) => { setProjects((items) => items.map((item) => item.id === projectId ? { ...updated, modified: 'Now' } : item)); message('Saved', 'Project Setup was saved.'); }} />}
           {view === 'internal' && <InternalMatrix issues={filtered} allCount={issues.length} draft={draft} selectedUid={selectedUid} edit={editIssue} setDraft={setDraft} submit={submit} remove={deleteEntry} newDraft={newDraft} saveTemplate={saveTemplate} templates={templates} deleteTemplate={requestDeleteTemplate} search={search} setSearch={setSearch} systems={systems} systemFilter={systemFilter} setSystemFilter={setSystemFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} tab={tab} setTab={setTab} />}
           {view === 'documents' && <Documents projectId={projectId} docs={docs} setDocs={setDocs} openPreview={setPreview} confirmAction={confirmAction} requestInput={requestInput} message={message} />}
           {view === 'sow' && <Deliverable title="Recommended SOW Matrix" eyebrow="Primary Flagship Deliverable" description="Uses submitted Internal Matrix entries assigned to Recommended SOW." rows={issues.filter((i) => i.sow)} columns={['SLR', 'System', 'Scope Item', 'Scope Concern', 'Recommended Bid Basis', 'Reference']} values={(i) => [i.id, systemName(i), i.title, i.concern, i.basis, i.reference]} update={() => updatePdf('sow', 'Recommended SOW Matrix')} url={pdfUrls.sow} onDownload={() => recordDownload('Recommended_SOW_Matrix.pdf', 'Recommended SOW Matrix')} preview={(url) => setPreview({ title: 'Recommended SOW Matrix', url, mode: 'pdf' })} send={() => prepareEmail('sow', 'Recommended SOW Matrix')} />}
@@ -499,7 +550,8 @@ export default function Home() {
           {view === 'checklist' && <Deliverable title="Contractor Response Checklist" eyebrow="Editable PDF" description="Every response other than Included requires a written reason. The generated PDF includes editable dropdown and multiline reason fields." rows={issues.filter((i) => i.checklist)} columns={['SLR', 'System', 'Scope Item', 'Response', 'Reason']} values={(i) => [i.id, systemName(i), i.title, i.response, i.responseReason]} update={() => updatePdf('checklist', 'Contractor Response Checklist')} url={pdfUrls.checklist} onDownload={() => recordDownload('Contractor_Response_Checklist.pdf', 'Contractor Response Checklist')} preview={(url) => setPreview({ title: 'Contractor Response Checklist', url, mode: 'pdf' })} send={() => prepareEmail('checklist', 'Contractor Response Checklist')} />}
           {view === 'leveling' && <BidLeveling />}
           {view === 'snippets' && <Deliverable title="Snippet Register" eyebrow="Supporting Reference Document" description="Snippet numbers are generated automatically when an SLR is marked as having a snippet." rows={issues.filter((i) => i.snippet)} columns={['Snippet No.', 'SLR', 'System', 'Reference', 'Caption']} values={(i) => [i.snippet, i.id, systemName(i), i.reference, i.title]} update={() => updatePdf('snippets', 'Snippet Register')} url={pdfUrls.snippets} onDownload={() => recordDownload('Snippet_Register.pdf', 'Snippet Register')} preview={(url) => setPreview({ title: 'Snippet Register', url, mode: 'pdf' })} send={() => prepareEmail('snippets', 'Snippet Register')} />}
-          {view === 'notes' && <InternalNotes value={internalNotes} onChange={(value) => setNotesByProject((current) => ({ ...current, [projectId]: value }))} />}
+          {view === 'notes' && <InternalNotes value={internalNotes} save={(value) => { setNotesByProject((current) => ({ ...current, [projectId]: value })); message('Saved', 'Internal notes were saved.'); }} />}
+          {view === 'customers' && <CustomerDatabase customers={customers} save={setCustomers} message={message} />}
           {view === 'exports' && <ExportLog entries={exportEntries} />}
           {view === 'email' && <EmailSettingsPage settings={emailSettings} save={setEmailSettings} message={message} />}
           {view === 'standards' && <OfficialLogoStandard />}
@@ -507,7 +559,8 @@ export default function Home() {
       </main>
       {preview && <PreviewModal preview={preview} close={() => setPreview(null)} />}
       {dialog && <AppDialog dialog={dialog} close={() => setDialog(null)} />}
-      {emailDraft && <EmailComposer draft={emailDraft} settings={emailSettings} sending={emailSending} change={setEmailDraft} close={() => setEmailDraft(null)} send={sendEmail} />}
+      {emailDraft && <EmailComposer draft={emailDraft} settings={emailSettings} customers={customers} sending={emailSending} change={setEmailDraft} close={() => setEmailDraft(null)} send={sendEmail} />}
+      {releaseSelection && <ReleaseSelectionDialog selection={releaseSelection} change={setReleaseSelection} close={() => setReleaseSelection(null)} confirm={async (selection) => { setReleaseSelection(null); if (selection.mode === 'download') await downloadReleasePackage(selection.kinds, selection.notes); else await prepareEmail('release', 'Official GC Release Package', selection.kinds, selection.notes); }} />}
     </div>
   );
 }
@@ -539,8 +592,9 @@ function InternalMatrix(props: any) {
           <TextArea label="Recommended Bid Basis" value={draft.basis} onChange={(value) => patch('basis', value)} />
           <TextArea label="Reason / Basis" value={draft.reason} onChange={(value) => patch('reason', value)} />
           <Field label="Contract Reference or Scope-Gap Basis" value={draft.reference} onChange={(value) => patch('reference', value)} />
+          <label className="checklist-toggle"><input type="checkbox" checked={draft.checklist} onChange={(event) => patch('checklist', event.target.checked)} /><div><b>Include on Contractor Response Checklist</b><span>Checked entries populate the editable Contractor Response Checklist PDF.</span></div></label>
           <div className="detail-tabs"><button className={props.tab === 'details' ? 'active' : ''} onClick={() => props.setTab('details')}>Details</button><button className={props.tab === 'snippets' ? 'active' : ''} onClick={() => props.setTab('snippets')}>Snippets</button><button className={props.tab === 'deliverables' ? 'active' : ''} onClick={() => props.setTab('deliverables')}>Deliverables</button><button className={props.tab === 'history' ? 'active' : ''} onClick={() => props.setTab('history')}>History</button></div>
-          {props.tab === 'details' && <div className="tab-panel two"><SelectField label="Contractor Response" value={draft.response} options={RESPONSE_OPTIONS} onChange={(value) => patch('response', value)} />{draft.response !== 'Included' && <Field label="Required Reason" value={draft.responseReason} onChange={(value) => patch('responseReason', value)} />}<Field label="RFI Resolution / Official Answer" value={draft.resolution} onChange={(value) => patch('resolution', value)} /></div>}
+          {props.tab === 'details' && <div className="tab-panel two"><SelectField label="Contractor Response" value={draft.response} options={RESPONSE_OPTIONS} onChange={(value) => patch('response', value)} />{draft.response !== 'Included' && <AutoGrowTextArea label="Required Reason" value={draft.responseReason} onChange={(value) => patch('responseReason', value)} />}<Field label="RFI Resolution / Official Answer" value={draft.resolution} onChange={(value) => patch('resolution', value)} /></div>}
           {props.tab === 'snippets' && <div className="tab-panel"><Check label="Create an automatically numbered snippet reference for this SLR" value={Boolean(draft.snippet)} change={(value) => patch('snippet', value ? 'pending' : '')} /><p className="help-text">The final SNP number is assigned on submission and renumbered when entries are deleted.</p></div>}
           {props.tab === 'deliverables' && <div className="tab-panel checklist"><Check label="Recommended SOW Matrix" value={draft.sow} change={(value) => patch('sow', value)} /><Check label="Clarification Matrix" value={draft.clarification} change={(value) => patch('clarification', value)} /><Check label="Formal RFI" value={draft.formalRfi} change={(value) => patch('formalRfi', value)} /><Check label="Contractor Response Checklist" value={draft.checklist} change={(value) => patch('checklist', value)} /></div>}
           {props.tab === 'history' && <div className="tab-panel timeline"><p><b>Draft workflow</b><span>Changes remain local until Submit Entry.</span></p></div>}
@@ -600,6 +654,7 @@ function Documents({ projectId, docs, setDocs, openPreview, confirmAction, reque
     setDocs((items) => [...items, ...additions]);
     setFolder('current');
     setSelectedId(additions[additions.length - 1].id);
+    message('Saved', `${additions.length} project document${additions.length === 1 ? '' : 's'} uploaded and saved.`);
   };
 
   const replaceFile = (event: ChangeEvent<HTMLInputElement>) => {
@@ -613,6 +668,7 @@ function Documents({ projectId, docs, setDocs, openPreview, confirmAction, reque
       setDocs((items) => [...items.map((doc) => doc.id === selected.id ? { ...doc, current: false } : doc), replacement]);
       setFolder('current');
       setSelectedId(id);
+      message('Saved', 'The replacement revision was saved and the prior file was moved to Previous Documents.');
     }, 'Replace Revision');
   };
 
@@ -641,7 +697,7 @@ function Documents({ projectId, docs, setDocs, openPreview, confirmAction, reque
   const saveDetails = () => {
     if (!detailsDraft) return;
     setDocs((items) => items.map((doc) => doc.id === detailsDraft.id ? detailsDraft : doc));
-    message('Document Details Saved', 'The display name, document type, revision, current status, issue date, and notes were saved.');
+    message('Saved', 'The document display name, type, revision, current status, issue date, and notes were saved.');
   };
 
   return <>
@@ -681,8 +737,15 @@ function Deliverable({ title, eyebrow, description, rows, columns, values, updat
   return <><PageHead eyebrow={eyebrow} title={title} description={description} action={<div className="button-row"><button className="secondary" onClick={update}>{url ? 'Update PDF' : 'Generate PDF'}</button><button className="secondary" disabled={!url} onClick={() => url && preview(url)}>Preview</button><button className="secondary" onClick={send}>Email PDF</button>{url ? <a className="primary link-button" href={url} download={`${title.replaceAll(' ', '_')}.pdf`} onClick={onDownload}>Download PDF</a> : <button className="primary" disabled>Download PDF</button>}</div>} /><div className="sync-note">PDF status: <b>{url ? 'Generated from current submitted entries' : 'Not generated'}</b>. Select Update PDF after changing deliverable assignments or submitted entries.</div><div className="matrix-export"><div className="matrix-table"><div className="matrix-row head" style={{ gridTemplateColumns: `repeat(${columns.length},minmax(120px,1fr))` }}>{columns.map((column) => <b key={column}>{column}</b>)}</div>{rows.length ? rows.map((issue) => <div className="matrix-row" key={issue.uid} style={{ gridTemplateColumns: `repeat(${columns.length},minmax(120px,1fr))` }}>{values(issue).map((value, index) => <span key={index}>{value || '-'}</span>)}</div>) : <div className="empty-state"><b>No submitted entries assigned</b><p>Assign an SLR to this deliverable and submit it from the Internal Matrix.</p></div>}</div></div></>;
 }
 
-function ProjectSetup({ project, save }: { project: Project; save: (key: keyof Project, value: string | string[]) => void }) {
-  return <><PageHead eyebrow="Project" title="Project Setup" description="Core project information and project-level system selection." /><div className="form-card"><Field label="Project Name" value={project.name} onChange={(value) => save('name', value)} /><Field label="GC / Client" value={project.client} onChange={(value) => save('client', value)} /><Field label="Version Date" type="date" value={project.versionDate} onChange={(value) => save('versionDate', value)} /><Field label="Revision" value={project.revision} onChange={(value) => save('revision', value)} /><SelectField label="Status" value={project.status} options={PROJECT_STATUS_OPTIONS} onChange={(value) => save('status', value)} /><MultiSelectField label="Systems" values={project.systems} options={SYSTEM_OPTIONS} onChange={(value) => save('systems', value)} /></div></>;
+function ProjectSetup({ project, customers, save }: { project: Project; customers: Customer[]; save: (project: Project) => void }) {
+  const [draft, setDraft] = useState<Project>(project);
+  useEffect(() => setDraft(project), [project.id, project]);
+  const customer = customers.find((item) => item.id === draft.customerId);
+  const chooseCustomer = (customerId: string) => {
+    const selected = customers.find((item) => item.id === customerId);
+    setDraft((current) => ({ ...current, customerId, client: selected?.name || current.client, contactIds: current.contactIds.filter((id) => selected?.contacts.some((contact) => contact.id === id)) }));
+  };
+  return <><PageHead eyebrow="Project" title="Project Setup" description="Core project information, customer selection, and project-level system selection." /><div className="form-card project-setup-card"><Field label="Project Name" value={draft.name} onChange={(value) => setDraft((current) => ({ ...current, name: value }))} /><SelectField label="Customer" value={draft.customerId} options={['', ...customers.map((item) => item.id)]} optionLabels={['Select customer...', ...customers.map((item) => item.name || 'Unnamed customer')]} onChange={chooseCustomer} /><Field label="GC / Client Display Name" value={draft.client} onChange={(value) => setDraft((current) => ({ ...current, client: value }))} /><Field label="Version Date" type="date" value={draft.versionDate} onChange={(value) => setDraft((current) => ({ ...current, versionDate: value }))} /><Field label="Revision" value={draft.revision} onChange={(value) => setDraft((current) => ({ ...current, revision: value }))} /><SelectField label="Status" value={draft.status} options={PROJECT_STATUS_OPTIONS} onChange={(value) => setDraft((current) => ({ ...current, status: value }))} /><MultiSelectField label="Systems" values={draft.systems} options={SYSTEM_OPTIONS} onChange={(value) => setDraft((current) => ({ ...current, systems: value }))} />{customer && <div className="selected-customer-note"><b>{customer.name}</b><span>{customer.contacts.length} saved contact{customer.contacts.length === 1 ? '' : 's'} available for the Dashboard Contacts tab.</span></div>}<div className="form-actions"><button className="primary" onClick={() => save(draft)}>Save Project Setup</button></div></div></>;
 }
 
 function MultiSelectField({ label, values, options, onChange }: { label: string; values: string[]; options: string[]; onChange: (values: string[]) => void }) {
@@ -696,9 +759,10 @@ function AppDialog({ dialog, close }: { dialog: DialogState; close: () => void }
   useEffect(() => setValue(dialog.kind === 'input' ? dialog.initialValue : ''), [dialog]);
   const confirm = async () => {
     if (dialog.kind === 'message') return close();
-    if (dialog.kind === 'confirm') await dialog.onConfirm();
-    if (dialog.kind === 'input') await dialog.onConfirm(value);
+    const current = dialog;
     close();
+    if (current.kind === 'confirm') await current.onConfirm();
+    if (current.kind === 'input') await current.onConfirm(value);
   };
   return <div className="dialog-backdrop" role="presentation"><div className="app-dialog" role="dialog" aria-modal="true"><div className="dialog-title"><b>{dialog.title}</b><button onClick={close}>Close</button></div><p>{dialog.message}</p>{dialog.kind === 'input' && <input autoFocus value={value} placeholder={dialog.placeholder} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && confirm()} />}<div className="dialog-actions">{dialog.kind !== 'message' && <button className="secondary" onClick={close}>Cancel</button>}<button className={dialog.kind === 'confirm' && dialog.danger ? 'danger-button' : 'primary'} disabled={dialog.kind === 'input' && !value.trim()} onClick={confirm}>{dialog.confirmLabel || (dialog.kind === 'message' ? 'OK' : 'Confirm')}</button></div></div></div>;
 }
@@ -708,8 +772,36 @@ function PreviewModal({ preview, close }: { preview: NonNullable<PreviewState>; 
 }
 
 
-function InternalNotes({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-  return <><PageHead eyebrow="Internal Workspace" title="Internal Notes" description="Private project notes are stored with this project and are not included in client deliverables." /><div className="notes-page"><textarea value={value} onChange={(event) => onChange(event.target.value)} placeholder="Jot down project thoughts, follow-up items, coordination notes, and internal reminders..." /></div></>;
+function InternalNotes({ value, save }: { value: string; save: (value: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  return <><PageHead eyebrow="Internal Workspace" title="Internal Notes" description="Private project notes are stored with this project and are not included in client deliverables." action={<button className="primary" onClick={() => save(draft)}>Save Notes</button>} /><div className="notes-page"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Jot down project thoughts, follow-up items, coordination notes, and internal reminders..." /></div></>;
+}
+
+function CustomerDatabase({ customers, save, message }: { customers: Customer[]; save: (customers: Customer[]) => void; message: (title: string, body: string) => void }) {
+  const [working, setWorking] = useState<Customer[]>(customers);
+  const [selectedId, setSelectedId] = useState(customers[0]?.id || '');
+  useEffect(() => { setWorking(customers); if (!customers.some((item) => item.id === selectedId)) setSelectedId(customers[0]?.id || ''); }, [customers]);
+  const selected = working.find((item) => item.id === selectedId);
+  const patchCustomer = (key: keyof Customer, value: string | CustomerContact[]) => setWorking((items) => items.map((item) => item.id === selectedId ? { ...item, [key]: value } : item));
+  const patchContact = (contactId: string, key: keyof CustomerContact, value: string) => patchCustomer('contacts', (selected?.contacts || []).map((contact) => contact.id === contactId ? { ...contact, [key]: value } : contact));
+  const addCustomer = () => { const customer = blankCustomer(); setWorking((items) => [...items, customer]); setSelectedId(customer.id); };
+  const removeCustomer = () => { if (!selected) return; const next = working.filter((item) => item.id !== selected.id); setWorking(next); setSelectedId(next[0]?.id || ''); save(next); message('Saved', 'The customer was removed from the global Customer Database.'); };
+  const addContact = () => selected && patchCustomer('contacts', [...selected.contacts, blankCustomerContact()]);
+  const removeContact = (contactId: string) => selected && patchCustomer('contacts', selected.contacts.filter((contact) => contact.id !== contactId));
+  const saveDatabase = () => { save(working); message('Saved', 'The global Customer Database and email address book were saved.'); };
+  return <>
+    <PageHead eyebrow="Administration" title="Customer Database" description="Customer and contact records carry across every project and feed Project Setup, Dashboard Contacts, and the email address book." action={<button className="primary" onClick={addCustomer}>+ New Customer</button>} />
+    <div className="customer-database">
+      <aside className="customer-list"><div className="customer-list-head">Customers</div>{working.map((customer) => <button key={customer.id} className={selectedId === customer.id ? 'selected' : ''} onClick={() => setSelectedId(customer.id)}><b>{customer.name || 'New Customer'}</b><span>{customer.city || 'City not entered'}{customer.state ? `, ${customer.state}` : ''}</span><small>{customer.contacts.length} contact{customer.contacts.length === 1 ? '' : 's'}</small></button>)}{!working.length && <div className="empty-list"><b>No customers saved.</b><p>Create a customer to begin the global address book.</p></div>}</aside>
+      <section className="customer-editor">{!selected ? <div className="empty-state large"><b>Select or create a customer.</b></div> : <>
+        <div className="customer-editor-head"><div><span>Customer Record</span><h2>{selected.name || 'New Customer'}</h2></div><div className="button-row"><button className="danger-button" onClick={removeCustomer}>Delete Customer</button><button className="primary" onClick={saveDatabase}>Save Customer</button></div></div>
+        <div className="customer-form"><Field label="Company / Customer Name" value={selected.name} onChange={(value) => patchCustomer('name', value)} /><Field label="Website" value={selected.website} onChange={(value) => patchCustomer('website', value)} /><Field label="Address 1" value={selected.address1} onChange={(value) => patchCustomer('address1', value)} /><Field label="Address 2" value={selected.address2} onChange={(value) => patchCustomer('address2', value)} /><Field label="City" value={selected.city} onChange={(value) => patchCustomer('city', value)} /><Field label="State" value={selected.state} onChange={(value) => patchCustomer('state', value)} /><Field label="ZIP" value={selected.zip} onChange={(value) => patchCustomer('zip', value)} /><label className="field customer-notes"><span>Customer Notes</span><textarea value={selected.notes} onChange={(event) => patchCustomer('notes', event.target.value)} /></label></div>
+        <div className="contacts-editor-head"><div><span>Address Book</span><h3>Contacts</h3></div><button className="secondary" onClick={addContact}>+ Add Contact</button></div>
+        <div className="contacts-editor">{selected.contacts.map((contact) => <div className="contact-editor-row" key={contact.id}><Field label="Name" value={contact.name} onChange={(value) => patchContact(contact.id, 'name', value)} /><Field label="Title / Role" value={contact.title} onChange={(value) => patchContact(contact.id, 'title', value)} /><Field label="Email" value={contact.email} onChange={(value) => patchContact(contact.id, 'email', value)} /><Field label="Phone" value={contact.phone} onChange={(value) => patchContact(contact.id, 'phone', value)} /><button className="contact-remove" onClick={() => removeContact(contact.id)}>Remove</button></div>)}{!selected.contacts.length && <div className="empty-panel compact"><b>No contacts saved.</b><p>Add a contact for project assignment and email delivery.</p></div>}</div>
+      </>}</section>
+    </div>
+  </>;
 }
 
 function ExportLog({ entries }: { entries: ExportEntry[] }) {
@@ -721,25 +813,34 @@ function EmailSettingsPage({ settings, save, message }: { settings: EmailSetting
   const [draft, setDraft] = useState(settings);
   useEffect(() => setDraft(settings), [settings]);
   return <>
-    <PageHead eyebrow="Administration" title="Email Settings" description="Configure the default sender and reusable verified sender addresses used by the in-app PDF email composer." />
+    <PageHead eyebrow="Administration" title="Email Settings" description="Configure the default sender and edit the approved sender list used by the in-app PDF email composer." />
     <div className="form-card email-settings-card">
       <Field label="Default From Address" value={draft.defaultFrom} onChange={(value) => setDraft((current) => ({ ...current, defaultFrom: value }))} />
       <Field label="Default Reply-To Address" value={draft.replyTo} onChange={(value) => setDraft((current) => ({ ...current, replyTo: value }))} />
-      <label className="field email-address-list"><span>Additional From Addresses</span><textarea value={draft.additionalFrom.join('\n')} onChange={(event) => setDraft((current) => ({ ...current, additionalFrom: event.target.value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean) }))} placeholder="estimating@scopelogic.com\nprojects@scopelogic.com" /></label>
+      <label className="field email-address-list"><span>Approved From Addresses</span><textarea value={draft.additionalFrom.join('\n')} onChange={(event) => setDraft((current) => ({ ...current, additionalFrom: event.target.value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean) }))} placeholder="estimating@scopelogic.com\nprojects@scopelogic.com" /></label>
       <div className="email-settings-note"><b>Email provider requirement</b><p>Each sender must belong to a domain verified with the configured email provider. Leaving From blank in the composer uses the server default address.</p></div>
-      <div className="form-actions"><button className="primary" onClick={() => { save({ ...draft, defaultFrom: draft.defaultFrom.trim(), replyTo: draft.replyTo.trim(), additionalFrom: Array.from(new Set(draft.additionalFrom.map((item) => item.trim()).filter(Boolean))) }); message('Email Settings Saved', 'The default sender and reusable sender addresses were saved.'); }}>Save Email Settings</button></div>
+      <div className="form-actions"><button className="primary" onClick={() => { save({ ...draft, defaultFrom: draft.defaultFrom.trim(), replyTo: draft.replyTo.trim(), additionalFrom: Array.from(new Set(draft.additionalFrom.map((item) => item.trim()).filter(Boolean))) }); message('Saved', 'The default sender and approved sender list were saved.'); }}>Save Email Settings</button></div>
     </div>
   </>;
 }
 
-function EmailComposer({ draft, settings, sending, change, close, send }: { draft: EmailDraft; settings: EmailSettings; sending: boolean; change: (draft: EmailDraft | null) => void; close: () => void; send: (draft: EmailDraft) => void }) {
+function EmailComposer({ draft, settings, customers, sending, change, close, send }: { draft: EmailDraft; settings: EmailSettings; customers: Customer[]; sending: boolean; change: (draft: EmailDraft | null) => void; close: () => void; send: (draft: EmailDraft) => void }) {
   const patch = (key: keyof EmailDraft, value: string) => change({ ...draft, [key]: value });
   const senders = Array.from(new Set([settings.defaultFrom, ...settings.additionalFrom].filter(Boolean)));
+  const contacts = customers.flatMap((customer) => customer.contacts.filter((contact) => contact.email).map((contact) => ({ ...contact, customer: customer.name })));
+  const [addressContactId, setAddressContactId] = useState('');
+  const addressContact = contacts.find((contact) => contact.id === addressContactId);
+  const addAddress = (field: 'to' | 'cc') => {
+    if (!addressContact?.email) return;
+    const existing = parseAddresses(draft[field]);
+    patch(field, Array.from(new Set([...existing, addressContact.email])).join('; '));
+  };
   return <div className="dialog-backdrop email-backdrop" role="presentation">
     <div className="email-composer" role="dialog" aria-modal="true">
       <div className="email-composer-head"><div><img src="/brand/scopelogic-wordmark.png" alt="ScopeLogic" /><span>Email PDF Delivery</span></div><button onClick={close}>Close</button></div>
       <div className="email-composer-body">
-        <label className="field"><span>From</span><input list="scope-senders" value={draft.from} onChange={(event) => patch('from', event.target.value)} placeholder="Use server default sender" /><datalist id="scope-senders">{senders.map((sender) => <option key={sender} value={sender} />)}</datalist><small>Leave blank to use the default address configured on the server.</small></label>
+        <label className="field"><span>From</span><select value={draft.from} onChange={(event) => patch('from', event.target.value)}><option value="">Use server default sender</option>{senders.map((sender) => <option key={sender} value={sender}>{sender}</option>)}</select><small>Approved sender addresses are managed in Email Settings.</small></label>
+        <div className="address-book-picker"><label><span>Address Book</span><select value={addressContactId} onChange={(event) => setAddressContactId(event.target.value)}><option value="">Select a saved contact...</option>{contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.name || contact.email} — {contact.customer}</option>)}</select></label><button className="secondary" disabled={!addressContact} onClick={() => addAddress('to')}>Add to To</button><button className="secondary" disabled={!addressContact} onClick={() => addAddress('cc')}>Add to CC</button></div>
         <label className="field"><span>To</span><input value={draft.to} onChange={(event) => patch('to', event.target.value)} placeholder="recipient@example.com; second@example.com" /></label>
         <label className="field"><span>CC</span><input value={draft.cc} onChange={(event) => patch('cc', event.target.value)} placeholder="Optional" /></label>
         <label className="field"><span>Subject</span><input value={draft.subject} onChange={(event) => patch('subject', event.target.value)} /></label>
@@ -749,6 +850,11 @@ function EmailComposer({ draft, settings, sending, change, close, send }: { draf
       <div className="email-composer-actions"><button className="secondary" onClick={close}>Cancel</button><button className="primary" disabled={sending || !draft.to.trim() || !draft.subject.trim()} onClick={() => send(draft)}>{sending ? 'Sending...' : 'Send PDF'}</button></div>
     </div>
   </div>;
+}
+
+function ReleaseSelectionDialog({ selection, change, close, confirm }: { selection: ReleaseSelection; change: (selection: ReleaseSelection | null) => void; close: () => void; confirm: (selection: ReleaseSelection) => void | Promise<void> }) {
+  const toggle = (kind: PdfKind) => change({ ...selection, kinds: selection.kinds.includes(kind) ? selection.kinds.filter((item) => item !== kind) : [...selection.kinds, kind] });
+  return <div className="dialog-backdrop release-backdrop" role="presentation"><div className="release-dialog" role="dialog" aria-modal="true"><div className="dialog-title"><b>{selection.mode === 'download' ? 'Generate Official GC Release' : 'Email Official GC Release'}</b><button onClick={close}>Close</button></div><p>Select the deliverables to include in this release. The cover page will list only the selected documents.</p><div className="release-options">{RELEASE_OPTIONS.map((item) => <label key={item.kind}><input type="checkbox" checked={selection.kinds.includes(item.kind)} onChange={() => toggle(item.kind)} /><span>{item.label}</span></label>)}</div><label className="field"><span>Release Notes / Cover Note</span><textarea value={selection.notes} onChange={(event) => change({ ...selection, notes: event.target.value })} placeholder="Optional note for this official release..." /></label><div className="dialog-actions"><button className="secondary" onClick={close}>Cancel</button><button className="primary" disabled={!selection.kinds.length} onClick={() => confirm(selection)}>{selection.mode === 'download' ? 'Generate Release' : 'Prepare Email'}</button></div></div></div>;
 }
 
 function OfficialLogoStandard() {
@@ -763,7 +869,7 @@ function OfficialLogoStandard() {
 }
 
 function BidLeveling() { return <><PageHead eyebrow="Optional Post-Bid Analysis" title="Bid Leveling Summary" description="Bidder-level executive evaluation remains separate from the Contractor Response Checklist." /><div className="empty-state large"><b>Bid leveling workspace retained.</b><p>This section remains available for bidder strengths, weaknesses, risk, commercial concerns, and recommendation.</p></div></>; }
-function ProjectLibrary({ projects, active, entries, open, add, addEntry, deleteEntry }: { projects: Project[]; active: string; entries: CalendarEntry[]; open: (id: string) => void; add: () => void; addEntry: (entry: CalendarEntry) => void; deleteEntry: (id: string) => void }) {
+function ProjectLibrary({ projects, active, entries, open, add, addEntry, deleteEntry, message }: { projects: Project[]; active: string; entries: CalendarEntry[]; open: (id: string) => void; add: () => void; addEntry: (entry: CalendarEntry) => void; deleteEntry: (id: string) => void; message: (title: string, body: string) => void }) {
   const today = new Date();
   const [month, setMonth] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
   const [selectedDate, setSelectedDate] = useState(dateKey(today.getFullYear(), today.getMonth(), today.getDate()));
@@ -782,13 +888,13 @@ function ProjectLibrary({ projects, active, entries, open, add, addEntry, delete
     if (!selectedDate || !eventTitle.trim()) return;
     addEntry({ id: crypto.randomUUID(), date: selectedDate, title: eventTitle.trim(), type: eventType, projectId: eventProjectId });
     setEventTitle('');
+    message('Saved', 'The important date was added to the Project Library calendar.');
   };
 
   return <>
-    <PageHead eyebrow="ScopeLogic" title="Project Library" description="Every new project begins blank at SLR-001. Use the calendar to track bid dates, reviews, meetings, and delivery milestones." action={<button className="primary" onClick={add}>+ New Project</button>} />
-    <div className="project-library-layout">
-      <div className="project-grid">{projects.map((project) => <button key={project.id} className={`project-card ${project.id === active ? 'selected' : ''}`} onClick={() => open(project.id)}><span className="status">{project.status}</span><h3>{project.name}</h3><p>{project.client || 'Client not entered'}</p><div className="project-contract-summary"><span>{project.contract.status}</span><b>{project.contract.offering.replace(/^Product \d — /, '')}</b></div><b>Open project</b></button>)}</div>
-      <section className="calendar-panel">
+    <PageHead eyebrow="ScopeLogic" title="Project Library" description="Calendar milestones remain at the top of the library. Projects are listed below for faster scanning and higher information density." action={<button className="primary" onClick={add}>+ New Project</button>} />
+    <div className="project-library-stack">
+      <section className="calendar-panel library-calendar">
         <div className="calendar-head"><button className="secondary" onClick={() => setMonth(new Date(year, monthIndex - 1, 1))}>Previous</button><div><span>Important Dates</span><h2>{month.toLocaleString(undefined, { month: 'long', year: 'numeric' })}</h2></div><button className="secondary" onClick={() => setMonth(new Date(year, monthIndex + 1, 1))}>Next</button></div>
         <div className="calendar-weekdays">{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => <b key={day}>{day}</b>)}</div>
         <div className="calendar-grid">{calendarCells.map((day, index) => {
@@ -798,23 +904,36 @@ function ProjectLibrary({ projects, active, entries, open, add, addEntry, delete
           const isToday = key === dateKey(today.getFullYear(), today.getMonth(), today.getDate());
           return <button key={key} className={`calendar-day ${selectedDate === key ? 'selected' : ''} ${isToday ? 'today' : ''}`} onClick={() => setSelectedDate(key)}><strong>{day}</strong>{dayEntries.slice(0, 2).map((entry) => <span key={entry.id}>{entry.title}</span>)}{dayEntries.length > 2 && <em>+{dayEntries.length - 2} more</em>}</button>;
         })}</div>
-        <div className="calendar-editor">
-          <div><span>Selected date</span><b>{selectedDate}</b></div>
-          <input value={eventTitle} onChange={(event) => setEventTitle(event.target.value)} placeholder="Important date or milestone" />
-          <select value={eventType} onChange={(event) => setEventType(event.target.value)}>{CALENDAR_EVENT_TYPES.map((type) => <option key={type}>{type}</option>)}</select>
-          <select value={eventProjectId} onChange={(event) => setEventProjectId(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
+        <div className="calendar-editor compact-calendar-editor">
+          <div className="selected-date"><span>Selected date</span><b>{selectedDate}</b></div>
+          <label><span>Milestone</span><input value={eventTitle} onChange={(event) => setEventTitle(event.target.value)} placeholder="Important date or milestone" /></label>
+          <label><span>Type</span><select value={eventType} onChange={(event) => setEventType(event.target.value)}>{CALENDAR_EVENT_TYPES.map((type) => <option key={type}>{type}</option>)}</select></label>
+          <label><span>Project</span><select value={eventProjectId} onChange={(event) => setEventProjectId(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
           <button className="primary" disabled={!eventTitle.trim()} onClick={saveEvent}>Add Date</button>
         </div>
         <div className="calendar-event-list">{selectedEntries.length ? selectedEntries.map((entry) => <div key={entry.id}><div><b>{entry.title}</b><span>{entry.type} · {projects.find((project) => project.id === entry.projectId)?.name || 'General'}</span></div><button onClick={() => deleteEntry(entry.id)}>Remove</button></div>) : <p>No important dates marked for this day.</p>}</div>
+      </section>
+      <section className="project-list-section">
+        <div className="project-list-heading"><div><span>Projects</span><h2>ScopeLogic Projects</h2></div><b>{projects.length} project{projects.length === 1 ? '' : 's'}</b></div>
+        <div className="project-list-table">
+          <div className="project-list-row head"><span>Project</span><span>Customer</span><span>Status</span><span>Contract</span><span>Revision</span><span></span></div>
+          {projects.map((project) => <button key={project.id} className={`project-list-row ${project.id === active ? 'selected' : ''}`} onClick={() => open(project.id)}><span><b>{project.name}</b><small>{project.modified}</small></span><span>{project.client || 'Not entered'}</span><span><i>{project.status}</i></span><span>{project.contract.status}</span><span>{project.revision}</span><span className="open-project">Open</span></button>)}
+        </div>
       </section>
     </div>
   </>;
 }
 
-function Dashboard({ project, issues, docs, go, generateAll, emailAll, saveContract, message }: { project: Project; issues: Issue[]; docs: Doc[]; go: (view: View) => void; generateAll: () => void; emailAll: () => void; saveContract: (contract: ContractDetails) => void; message: (title: string, body: string) => void }) {
+function Dashboard({ project, issues, docs, customers, go, generateAll, emailAll, saveContract, saveContacts, message }: { project: Project; issues: Issue[]; docs: Doc[]; customers: Customer[]; go: (view: View) => void; generateAll: () => void; emailAll: () => void; saveContract: (contract: ContractDetails) => void; saveContacts: (contactIds: string[]) => void; message: (title: string, body: string) => void }) {
   const [contract, setContract] = useState<ContractDetails>(project.contract || blankContract());
+  const [activeTab, setActiveTab] = useState<'contract' | 'contacts'>('contract');
+  const [contactIds, setContactIds] = useState<string[]>(project.contactIds || []);
   useEffect(() => setContract(project.contract || blankContract()), [project.id, project.contract]);
+  useEffect(() => setContactIds(project.contactIds || []), [project.id, project.contactIds]);
   const currentDrawings = docs.filter((doc) => doc.current && doc.type === 'Drawings');
+  const customer = customers.find((item) => item.id === project.customerId);
+  const availableContacts = customer?.contacts || [];
+  const selectedContacts = availableContacts.filter((contact) => contactIds.includes(contact.id));
   const engagements = contractEngagementOptions(contract.offering);
   const tiers = contractTierOptions(contract.offering);
   const patchOffering = (offering: string) => {
@@ -822,26 +941,38 @@ function Dashboard({ project, issues, docs, go, generateAll, emailAll, saveContr
     const tier = contractTierOptions(offering)[0];
     setContract((current) => ({ ...current, offering, engagement, tier }));
   };
+  const toggleContact = (id: string) => setContactIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   return <>
-    <PageHead eyebrow="Project Dashboard" title={project.name} description="Submitted scope issues, current drawings, and engagement details." />
+    <PageHead eyebrow="Project Dashboard" title={project.name} description="Submitted scope issues, current drawings, project contacts, and contract details." />
     <div className="metrics"><Metric n={issues.length} label="Submitted SLRs" /><Metric n={issues.filter((issue) => issue.status === 'Open' || issue.status === 'Under Review').length} label="Open Issues" /><Metric n={issues.filter((issue) => issue.formalRfi).length} label="Formal RFIs" /><Metric n={currentDrawings.length} label="Current Drawings" /></div>
     <div className="button-row dashboard-actions"><button className="primary" onClick={() => go('internal')}>Open Internal Matrix</button><button className="secondary" onClick={generateAll}>Generate All PDFs for GC</button><button className="secondary" onClick={emailAll}>Email All PDFs</button></div>
-    <div className="dashboard-grid dashboard-detail-grid">
-      <section className="panel current-drawings-panel"><div className="panel-head"><div><span>Document Control</span><h2>Current Drawings</h2></div><button onClick={() => go('documents')}>Open Project Documents</button></div>{currentDrawings.length ? currentDrawings.map((doc) => <div className="document-line" key={doc.id}><div><b>{doc.name}</b><span>{doc.fileName}</span></div><div><b>{doc.revision || 'Revision not entered'}</b><span>{doc.date || 'Issue date not entered'}</span></div></div>) : <div className="empty-panel"><b>No drawings are marked current.</b><p>Upload drawings in Project Documents and select the Current Document checkbox.</p></div>}</section>
-      <section className="panel contract-panel"><div className="panel-head"><div><span>Engagement</span><h2>Contract Details</h2></div><span className="contract-status">{contract.status}</span></div>
-        <div className="contract-form">
-          <SelectField label="Product Offering" value={contract.offering} options={CONTRACT_OFFERINGS} onChange={patchOffering} />
-          <SelectField label="Engagement Basis" value={contract.engagement} options={engagements} onChange={(value) => setContract((current) => ({ ...current, engagement: value }))} />
-          <SelectField label="Pricing Tier" value={contract.tier} options={tiers} onChange={(value) => setContract((current) => ({ ...current, tier: value }))} />
-          <SelectField label="Contract Status" value={contract.status} options={CONTRACT_STATUS_OPTIONS} onChange={(value) => setContract((current) => ({ ...current, status: value }))} />
-          <Field label="Contract / Proposal Number" value={contract.contractNumber} onChange={(value) => setContract((current) => ({ ...current, contractNumber: value }))} />
-          <Field label="Contract Amount" value={contract.amount} onChange={(value) => setContract((current) => ({ ...current, amount: value }))} />
-          <Field label="Start Date" type="date" value={contract.startDate} onChange={(value) => setContract((current) => ({ ...current, startDate: value }))} />
-          <Field label="Target Completion" type="date" value={contract.targetDate} onChange={(value) => setContract((current) => ({ ...current, targetDate: value }))} />
-          <div className="pricing-guidance"><span>Established pricing guidance</span><b>{pricingGuidance(contract)}</b><p>Products 1–3 include one virtual review meeting per bid cycle. Travel is included within the established 50-mile Atlanta radius; mileage is reimbursable and travel time is excluded from monthly hours.</p></div>
-          <label className="field contract-notes"><span>Contract Notes</span><textarea value={contract.notes} onChange={(event) => setContract((current) => ({ ...current, notes: event.target.value }))} placeholder="Scope limits, billing terms, meeting allowances, add-ons, or special conditions..." /></label>
-        </div>
-        <div className="contract-actions"><button className="primary" onClick={() => { saveContract(contract); message('Contract Details Saved', 'The project dashboard contract details were saved.'); }}>Save Contract Details</button></div>
+    <div className="dashboard-workspace">
+      <section className="panel current-drawings-panel compact"><div className="panel-head"><div><span>Document Control</span><h2>Current Drawings</h2></div><button onClick={() => go('documents')}>Documents</button></div>{currentDrawings.length ? currentDrawings.slice(0, 5).map((doc) => <div className="document-line compact" key={doc.id}><div><b>{doc.name}</b><span>{doc.revision || 'No revision'} · {doc.date || 'No issue date'}</span></div></div>) : <div className="empty-panel compact"><b>No current drawings.</b><p>Mark drawings Current in Project Documents.</p></div>}{currentDrawings.length > 5 && <button className="more-link" onClick={() => go('documents')}>+{currentDrawings.length - 5} more drawings</button>}</section>
+      <section className="panel dashboard-tab-panel">
+        <div className="dashboard-tabs"><button className={activeTab === 'contract' ? 'active' : ''} onClick={() => setActiveTab('contract')}>Contract</button><button className={activeTab === 'contacts' ? 'active' : ''} onClick={() => setActiveTab('contacts')}>Contacts</button></div>
+        {activeTab === 'contract' && <div className="dashboard-tab-content"><div className="panel-head"><div><span>Engagement</span><h2>Contract Details</h2></div><span className="contract-status">{contract.status}</span></div>
+          <div className="contract-form">
+            <SelectField label="Product Offering" value={contract.offering} options={CONTRACT_OFFERINGS} onChange={patchOffering} />
+            <SelectField label="Engagement Basis" value={contract.engagement} options={engagements} onChange={(value) => setContract((current) => ({ ...current, engagement: value }))} />
+            <SelectField label="Pricing Tier" value={contract.tier} options={tiers} onChange={(value) => setContract((current) => ({ ...current, tier: value }))} />
+            <SelectField label="Contract Status" value={contract.status} options={CONTRACT_STATUS_OPTIONS} onChange={(value) => setContract((current) => ({ ...current, status: value }))} />
+            <Field label="Contract / Proposal Number" value={contract.contractNumber} onChange={(value) => setContract((current) => ({ ...current, contractNumber: value }))} />
+            <Field label="Contract Amount" value={contract.amount} onChange={(value) => setContract((current) => ({ ...current, amount: value }))} />
+            <Field label="Start Date" type="date" value={contract.startDate} onChange={(value) => setContract((current) => ({ ...current, startDate: value }))} />
+            <Field label="Target Completion" type="date" value={contract.targetDate} onChange={(value) => setContract((current) => ({ ...current, targetDate: value }))} />
+            <div className="pricing-guidance"><span>Established pricing guidance</span><b>{pricingGuidance(contract)}</b><p>Products 1–3 include one virtual review meeting per bid cycle. Travel is included within the established 50-mile Atlanta radius; mileage is reimbursable and travel time is excluded from monthly hours.</p></div>
+            <label className="field contract-notes"><span>Contract Notes</span><textarea value={contract.notes} onChange={(event) => setContract((current) => ({ ...current, notes: event.target.value }))} placeholder="Scope limits, billing terms, meeting allowances, add-ons, or special conditions..." /></label>
+          </div>
+          <div className="contract-actions"><button className="primary" onClick={() => { saveContract(contract); message('Saved', 'Contract Details were saved.'); }}>Save Contract Details</button></div>
+        </div>}
+        {activeTab === 'contacts' && <div className="dashboard-tab-content contacts-tab"><div className="panel-head"><div><span>Project Team</span><h2>Project Contacts</h2></div><button onClick={() => go('customers')}>Customer Database</button></div>
+          {!customer ? <div className="empty-panel"><b>No customer selected.</b><p>Select a customer in Project Setup, then choose the contacts assigned to this project.</p></div> : <>
+            <div className="customer-summary"><b>{customer.name}</b><span>{[customer.address1, customer.city, customer.state, customer.zip].filter(Boolean).join(', ') || 'Address not entered'}</span></div>
+            <div className="project-contact-picker">{availableContacts.length ? availableContacts.map((contact) => <label key={contact.id}><input type="checkbox" checked={contactIds.includes(contact.id)} onChange={() => toggleContact(contact.id)} /><div><b>{contact.name || 'Unnamed contact'}</b><span>{contact.title || 'Title not entered'}</span><small>{contact.email || 'Email not entered'}{contact.phone ? ` · ${contact.phone}` : ''}</small></div></label>) : <div className="empty-panel compact"><b>No contacts saved for this customer.</b><p>Add contacts in the Customer Database.</p></div>}</div>
+            {selectedContacts.length > 0 && <div className="selected-contact-count">{selectedContacts.length} contact{selectedContacts.length === 1 ? '' : 's'} selected for this project</div>}
+            <div className="contract-actions"><button className="primary" onClick={() => { saveContacts(contactIds); message('Saved', 'Project Contacts were saved.'); }}>Save Project Contacts</button></div>
+          </>}
+        </div>}
       </section>
     </div>
   </>;
@@ -851,6 +982,7 @@ function SimplePage({ title, text }: { title: string; text: string }) { return <
 function PageHead({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) { return <div className="page-head"><div><span>{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>; }
 function Metric({ n, label }: { n: number; label: string }) { return <div className="metric"><b>{n}</b><span>{label}</span></div>; }
 function Field({ label, value, onChange, type = 'text' }: { label: string; value: string; onChange: (value: string) => void; type?: string }) { return <label className="field"><span>{label}</span><input type={type} value={value || ''} onChange={(event) => onChange(event.target.value)} /></label>; }
-function SelectField({ label, value, options, onChange, compact = false }: { label: string; value: string; options: string[]; onChange: (value: string) => void; compact?: boolean }) { return <label className={`field select-field ${compact ? 'compact' : ''}`}><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>; }
+function SelectField({ label, value, options, optionLabels, onChange, compact = false }: { label: string; value: string; options: string[]; optionLabels?: string[]; onChange: (value: string) => void; compact?: boolean }) { return <label className={`field select-field ${compact ? 'compact' : ''}`}><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option, index) => <option key={`${option}-${index}`} value={option}>{optionLabels?.[index] ?? option}</option>)}</select></label>; }
 function TextArea({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) { return <label className="field textarea"><span>{label}</span><textarea value={value || ''} onChange={(event) => onChange(event.target.value)} /></label>; }
+function AutoGrowTextArea({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) { const ref = useRef<HTMLTextAreaElement>(null); useEffect(() => { if (!ref.current) return; ref.current.style.height = 'auto'; ref.current.style.height = `${Math.max(38, ref.current.scrollHeight)}px`; }, [value]); return <label className="field textarea auto-grow"><span>{label}</span><textarea ref={ref} rows={1} value={value || ''} onChange={(event) => onChange(event.target.value)} /></label>; }
 function Check({ label, value, change }: { label: string; value: boolean; change: (value: boolean) => void }) { return <label><input type="checkbox" checked={value} onChange={(event) => change(event.target.checked)} /><span>{label}</span></label>; }
