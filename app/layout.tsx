@@ -2,7 +2,7 @@ import './globals.css';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'ScopeLogic Revision 14.7',
+  title: 'ScopeLogic Revision 14.8',
   description: 'Division 27/28 scope and procurement workspace',
   icons: {
     icon: '/brand/scopelogic-app-icon.png',

@@ -83,6 +83,7 @@ type Issue = {
   clarification: boolean;
   formalRfi: boolean;
   checklist: boolean;
+  checklistItem: string;
   response: string;
   responseReason: string;
 };
@@ -157,7 +158,7 @@ const blankContract = (): ContractDetails => ({
 const blankProject = (id: string): Project => ({ id, name: 'New ScopeLogic Project', client: '', customerId: '', contactIds: [], versionDate: new Date().toISOString().slice(0, 10), status: 'Planning', systems: [], revision: 'Rev 0', modified: 'Now', contract: blankContract() });
 const blankCustomer = (): Customer => ({ id: crypto.randomUUID(), name: '', address1: '', address2: '', city: '', state: '', zip: '', website: '', notes: '', contacts: [] });
 const blankCustomerContact = (): CustomerContact => ({ id: crypto.randomUUID(), name: '', title: '', email: '', phone: '' });
-const blankIssue = (number: number): Issue => ({ uid: crypto.randomUUID(), id: `SLR-${String(number).padStart(3, '0')}`, system: 'Structured Cabling', customSystem: '', title: '', status: 'Open', concern: '', rfiQuestion: '', basis: '', reason: '', reference: '', rfi: '', resolution: '', snippet: '', sow: true, clarification: true, formalRfi: false, checklist: true, response: 'Included', responseReason: '' });
+const blankIssue = (number: number): Issue => ({ uid: crypto.randomUUID(), id: `SLR-${String(number).padStart(3, '0')}`, system: 'Structured Cabling', customSystem: '', title: '', status: 'Open', concern: '', rfiQuestion: '', basis: '', reason: '', reference: '', rfi: '', resolution: '', snippet: '', sow: true, clarification: true, formalRfi: false, checklist: false, checklistItem: '', response: 'Included', responseReason: '' });
 const cloneIssue = (issue: Issue): Issue => JSON.parse(JSON.stringify(issue));
 const systemName = (issue: Issue) => (issue.system === 'Other' ? issue.customSystem || 'Other' : issue.system);
 const normalizeIssues = (items: Issue[]) => {
@@ -181,11 +182,16 @@ const normalizeProject = (project: Partial<Project> & { id: string } & { bidDate
   contract: { ...blankContract(), ...(project.contract || {}) },
 });
 
-const normalizeIssue = (issue: Partial<Issue> & Pick<Issue, 'uid' | 'id'>): Issue => ({
-  ...blankIssue(1),
-  ...issue,
-  rfiQuestion: issue.rfiQuestion ?? (issue.formalRfi ? issue.concern || '' : ''),
-});
+const normalizeIssue = (issue: Partial<Issue> & Pick<Issue, 'uid' | 'id'>): Issue => {
+  const checklistItem = issue.checklistItem ?? (issue.checklist ? issue.title || '' : '');
+  return {
+    ...blankIssue(1),
+    ...issue,
+    rfiQuestion: issue.rfiQuestion ?? (issue.formalRfi ? issue.concern || '' : ''),
+    checklistItem,
+    checklist: Boolean(checklistItem.trim()),
+  };
+};
 
 const contractEngagementOptions = (offering: string) => {
   if (offering.startsWith('Product 2')) return ['Standalone', 'Add-On After Product 1'];
@@ -320,7 +326,7 @@ export default function Home() {
   const [releaseSelection, setReleaseSelection] = useState<ReleaseSelection | null>(null);
 
   useEffect(() => {
-    const raw = localStorage.getItem('scopelogic-r14-7') || localStorage.getItem('scopelogic-r14-6') || localStorage.getItem('scopelogic-r14-5') || localStorage.getItem('scopelogic-r14-4') || localStorage.getItem('scopelogic-r14-3') || localStorage.getItem('scopelogic-r14-2');
+    const raw = localStorage.getItem('scopelogic-r14-8') || localStorage.getItem('scopelogic-r14-7') || localStorage.getItem('scopelogic-r14-6') || localStorage.getItem('scopelogic-r14-5') || localStorage.getItem('scopelogic-r14-4') || localStorage.getItem('scopelogic-r14-3') || localStorage.getItem('scopelogic-r14-2');
     if (!raw) return;
     try {
       const data = JSON.parse(raw);
@@ -342,7 +348,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('scopelogic-r14-7', JSON.stringify({ projects, projectId, issuesByProject, docsByProject, templates, notesByProject, exportsByProject, emailSettings, calendarEntries, customers }));
+    localStorage.setItem('scopelogic-r14-8', JSON.stringify({ projects, projectId, issuesByProject, docsByProject, templates, notesByProject, exportsByProject, emailSettings, calendarEntries, customers }));
   }, [projects, projectId, issuesByProject, docsByProject, templates, notesByProject, exportsByProject, emailSettings, calendarEntries, customers]);
 
 
@@ -386,12 +392,14 @@ export default function Home() {
     if (draft.system === 'Other' && !draft.customSystem.trim()) return message('Other System Required', 'Define the custom system before submitting this SLR.');
     if (draft.formalRfi && !draft.rfiQuestion.trim()) return message('RFI Question Required', 'Enter the formal RFI question before submitting an SLR assigned to Formal RFI.');
     if (draft.response !== 'Included' && !draft.responseReason.trim()) return message('Contractor Response Reason Required', 'A reason is required when the Contractor Response is anything other than Included.');
+    const isNewEntry = !selectedUid;
     const savedId = draft.id;
-    setIssues((items) => selectedUid ? items.map((item) => item.uid === selectedUid ? { ...draft, uid: selectedUid } : item) : [...items, draft]);
-    setSelectedUid(draft.uid);
-    setDraft(null);
+    const submittedDraft = { ...draft, checklistItem: draft.checklistItem.trim(), checklist: Boolean(draft.checklistItem.trim()) };
+    setIssues((items) => selectedUid ? items.map((item) => item.uid === selectedUid ? { ...submittedDraft, uid: selectedUid } : item) : [...items, submittedDraft]);
+    setSelectedUid('');
+    setDraft(isNewEntry ? blankIssue(issues.length + 2) : null);
     setPdfUrls({});
-    message('Saved', `${savedId} was submitted to the Internal Matrix.`);
+    message('Saved', `${savedId} was submitted to the Internal Matrix. The new-entry fields have been cleared.`);
   };
 
   const deleteEntry = () => {
@@ -514,7 +522,8 @@ export default function Home() {
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || 'The email service rejected the message.');
       setEmailDraft(null);
-      message('Email Sent', `${draftToSend.filename} was sent successfully.`);
+      setEmailSending(false);
+      window.setTimeout(() => message('Sent', `${draftToSend.filename} was sent successfully.`), 25);
     } catch (error) {
       message('Email Could Not Be Sent', error instanceof Error ? error.message : 'Check the email-service configuration and try again.');
     } finally {
@@ -525,7 +534,7 @@ export default function Home() {
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileNav ? 'show' : ''}`}>
-        <div className="brand"><div className="brand-mark"><img src="/brand/scopelogic-logo-mark.png" alt="ScopeLogic" /></div><div><div className="brand-name-box"><img className="brand-wordmark" src="/brand/scopelogic-wordmark.png" alt="ScopeLogic" /></div><span>Revision 14.7</span></div></div>
+        <div className="brand"><div className="brand-mark"><img src="/brand/scopelogic-logo-mark.png" alt="ScopeLogic" /></div><div><div className="brand-name-box"><img className="brand-wordmark" src="/brand/scopelogic-wordmark.png" alt="ScopeLogic" /></div><span>Revision 14.8</span></div></div>
         <button className="project-switch" onClick={() => setView('projects')}><span>Current project</span><b>{project.name}</b><small>Switch projects</small></button>
         <Nav label="PROJECT" items={[["projects", "Project Library"], ["dashboard", "Dashboard"], ["setup", "Project Setup"]]} view={view} setView={setView} />
         <Nav label="WORKSPACE" items={[["internal", "ScopeLogic Internal Matrix"], ["documents", "Project Documents"], ["notes", "Internal Notes"]]} view={view} setView={setView} />
@@ -536,7 +545,7 @@ export default function Home() {
         <header className="topbar">
           <button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)}>Menu</button>
           <div><span>{project.client || 'ScopeLogic project'}</span><b>{project.name}</b></div>
-          <div className="top-actions"><button className="secondary" onClick={() => setReleaseSelection({ mode: 'download', kinds: [...ALL_RELEASE_KINDS], notes: '' })}>Generate All PDFs</button><button className="secondary" onClick={() => setReleaseSelection({ mode: 'email', kinds: [...ALL_RELEASE_KINDS], notes: '' })}>Email All PDFs</button><button className="secondary" onClick={() => setView('documents')}>Documents</button><button className="primary" onClick={() => newDraft()}>+ New SLR</button></div>
+          <div className="top-actions"><button className="secondary" onClick={() => setReleaseSelection({ mode: 'download', kinds: [...ALL_RELEASE_KINDS], notes: '' })}>Generate All PDFs</button><button className="secondary" onClick={() => setReleaseSelection({ mode: 'email', kinds: [...ALL_RELEASE_KINDS], notes: '' })}>Email All PDFs</button><button className="secondary" onClick={() => setView('documents')}>Documents</button></div>
         </header>
         <div className="page">
           {view === 'projects' && <ProjectLibrary projects={projects} active={projectId} entries={calendarEntries} open={(id) => { setProjectId(id); setSelectedUid(''); setDraft(null); setView('dashboard'); }} add={addProject} addEntry={(entry) => setCalendarEntries((items) => [...items, entry])} deleteEntry={(id) => setCalendarEntries((items) => items.filter((item) => item.id !== id))} message={message} />}
@@ -547,7 +556,7 @@ export default function Home() {
           {view === 'sow' && <Deliverable title="Recommended SOW Matrix" eyebrow="Primary Flagship Deliverable" description="Uses submitted Internal Matrix entries assigned to Recommended SOW." rows={issues.filter((i) => i.sow)} columns={['SLR', 'System', 'Scope Item', 'Scope Concern', 'Recommended Bid Basis', 'Reference']} values={(i) => [i.id, systemName(i), i.title, i.concern, i.basis, i.reference]} update={() => updatePdf('sow', 'Recommended SOW Matrix')} url={pdfUrls.sow} onDownload={() => recordDownload('Recommended_SOW_Matrix.pdf', 'Recommended SOW Matrix')} preview={(url) => setPreview({ title: 'Recommended SOW Matrix', url, mode: 'pdf' })} send={() => prepareEmail('sow', 'Recommended SOW Matrix')} />}
           {view === 'clarifications' && <Deliverable title="Clarification Matrix" eyebrow="GC Working Document" description="When an SLR is also a Formal RFI, its RFI number appears directly below the SLR number." rows={issues.filter((i) => i.clarification)} columns={['SLR / RFI', 'System', 'Question / Issue', 'Recommended Bid Basis', 'Resolution', 'Status', 'Reference']} values={(i) => [[i.id, i.rfi].filter(Boolean).join('\n'), systemName(i), i.concern, i.basis, i.resolution, i.status, i.reference]} update={() => updatePdf('clarifications', 'Clarification Matrix')} url={pdfUrls.clarifications} onDownload={() => recordDownload('Clarification_Matrix.pdf', 'Clarification Matrix')} preview={(url) => setPreview({ title: 'Clarification Matrix', url, mode: 'pdf' })} send={() => prepareEmail('clarifications', 'Clarification Matrix')} />}
           {view === 'rfi' && <Deliverable title="Formal RFI" eyebrow="A/E Deliverable" description="RFI numbers are generated automatically from submitted entries assigned to Formal RFI." rows={issues.filter((i) => i.formalRfi)} columns={['RFI No.', 'System', 'Question', 'Answer']} values={(i) => [i.rfi, systemName(i), i.rfiQuestion || i.concern, i.resolution]} update={() => updatePdf('rfi', 'Formal RFI')} url={pdfUrls.rfi} onDownload={() => recordDownload('Formal_RFI.pdf', 'Formal RFI')} preview={(url) => setPreview({ title: 'Formal RFI', url, mode: 'pdf' })} send={() => prepareEmail('rfi', 'Formal RFI')} />}
-          {view === 'checklist' && <Deliverable title="Contractor Response Checklist" eyebrow="Editable PDF" description="Every response other than Included requires a written reason. The generated PDF includes editable dropdown and multiline reason fields." rows={issues.filter((i) => i.checklist)} columns={['SLR', 'System', 'Scope Item', 'Response', 'Reason']} values={(i) => [i.id, systemName(i), i.title, i.response, i.responseReason]} update={() => updatePdf('checklist', 'Contractor Response Checklist')} url={pdfUrls.checklist} onDownload={() => recordDownload('Contractor_Response_Checklist.pdf', 'Contractor Response Checklist')} preview={(url) => setPreview({ title: 'Contractor Response Checklist', url, mode: 'pdf' })} send={() => prepareEmail('checklist', 'Contractor Response Checklist')} />}
+          {view === 'checklist' && <Deliverable title="Contractor Response Checklist" eyebrow="Editable PDF" description="Every response other than Included requires a written reason. The generated PDF includes editable dropdown and multiline reason fields." rows={issues.filter((i) => i.checklistItem.trim())} columns={['SLR', 'System', 'Checklist Scope Item', 'Response', 'Reason']} values={(i) => [i.id, systemName(i), i.checklistItem, i.response, i.responseReason]} update={() => updatePdf('checklist', 'Contractor Response Checklist')} url={pdfUrls.checklist} onDownload={() => recordDownload('Contractor_Response_Checklist.pdf', 'Contractor Response Checklist')} preview={(url) => setPreview({ title: 'Contractor Response Checklist', url, mode: 'pdf' })} send={() => prepareEmail('checklist', 'Contractor Response Checklist')} />}
           {view === 'leveling' && <BidLeveling />}
           {view === 'snippets' && <Deliverable title="Snippet Register" eyebrow="Supporting Reference Document" description="Snippet numbers are generated automatically when an SLR is marked as having a snippet." rows={issues.filter((i) => i.snippet)} columns={['Snippet No.', 'SLR', 'System', 'Reference', 'Caption']} values={(i) => [i.snippet, i.id, systemName(i), i.reference, i.title]} update={() => updatePdf('snippets', 'Snippet Register')} url={pdfUrls.snippets} onDownload={() => recordDownload('Snippet_Register.pdf', 'Snippet Register')} preview={(url) => setPreview({ title: 'Snippet Register', url, mode: 'pdf' })} send={() => prepareEmail('snippets', 'Snippet Register')} />}
           {view === 'notes' && <InternalNotes value={internalNotes} save={(value) => { setNotesByProject((current) => ({ ...current, [projectId]: value })); message('Saved', 'Internal notes were saved.'); }} />}
@@ -592,11 +601,12 @@ function InternalMatrix(props: any) {
           <TextArea label="Recommended Bid Basis" value={draft.basis} onChange={(value) => patch('basis', value)} />
           <TextArea label="Reason / Basis" value={draft.reason} onChange={(value) => patch('reason', value)} />
           <Field label="Contract Reference or Scope-Gap Basis" value={draft.reference} onChange={(value) => patch('reference', value)} />
-          <label className="checklist-toggle"><input type="checkbox" checked={draft.checklist} onChange={(event) => patch('checklist', event.target.checked)} /><div><b>Include on Contractor Response Checklist</b><span>Checked entries populate the editable Contractor Response Checklist PDF.</span></div></label>
+          <AutoGrowTextArea label="Contractor Checklist Scope Item" value={draft.checklistItem} onChange={(value) => patch('checklistItem', value)} />
+          <p className="help-text checklist-help">This is the exact scope language shown on the Contractor Response Checklist. Leave it blank to omit this SLR from the checklist.</p>
           <div className="detail-tabs"><button className={props.tab === 'details' ? 'active' : ''} onClick={() => props.setTab('details')}>Details</button><button className={props.tab === 'snippets' ? 'active' : ''} onClick={() => props.setTab('snippets')}>Snippets</button><button className={props.tab === 'deliverables' ? 'active' : ''} onClick={() => props.setTab('deliverables')}>Deliverables</button><button className={props.tab === 'history' ? 'active' : ''} onClick={() => props.setTab('history')}>History</button></div>
           {props.tab === 'details' && <div className="tab-panel two"><SelectField label="Contractor Response" value={draft.response} options={RESPONSE_OPTIONS} onChange={(value) => patch('response', value)} />{draft.response !== 'Included' && <AutoGrowTextArea label="Required Reason" value={draft.responseReason} onChange={(value) => patch('responseReason', value)} />}<Field label="RFI Resolution / Official Answer" value={draft.resolution} onChange={(value) => patch('resolution', value)} /></div>}
           {props.tab === 'snippets' && <div className="tab-panel"><Check label="Create an automatically numbered snippet reference for this SLR" value={Boolean(draft.snippet)} change={(value) => patch('snippet', value ? 'pending' : '')} /><p className="help-text">The final SNP number is assigned on submission and renumbered when entries are deleted.</p></div>}
-          {props.tab === 'deliverables' && <div className="tab-panel checklist"><Check label="Recommended SOW Matrix" value={draft.sow} change={(value) => patch('sow', value)} /><Check label="Clarification Matrix" value={draft.clarification} change={(value) => patch('clarification', value)} /><Check label="Formal RFI" value={draft.formalRfi} change={(value) => patch('formalRfi', value)} /><Check label="Contractor Response Checklist" value={draft.checklist} change={(value) => patch('checklist', value)} /></div>}
+          {props.tab === 'deliverables' && <div className="tab-panel checklist"><Check label="Recommended SOW Matrix" value={draft.sow} change={(value) => patch('sow', value)} /><Check label="Clarification Matrix" value={draft.clarification} change={(value) => patch('clarification', value)} /><Check label="Formal RFI" value={draft.formalRfi} change={(value) => patch('formalRfi', value)} /><div className="deliverable-rule-note"><b>Contractor Response Checklist</b><span>Controlled by the Contractor Checklist Scope Item text box above. Blank means not included.</span></div></div>}
           {props.tab === 'history' && <div className="tab-panel timeline"><p><b>Draft workflow</b><span>Changes remain local until Submit Entry.</span></p></div>}
           <div className="submit-bar"><button className="secondary" onClick={props.saveTemplate}>Save This SLR as Template</button><button className="primary" onClick={props.submit}>Submit Entry</button></div>
         </>}
@@ -811,14 +821,32 @@ function ExportLog({ entries }: { entries: ExportEntry[] }) {
 
 function EmailSettingsPage({ settings, save, message }: { settings: EmailSettings; save: (settings: EmailSettings) => void; message: (title: string, body: string) => void }) {
   const [draft, setDraft] = useState(settings);
+  const [serviceStatus, setServiceStatus] = useState<{ configured: boolean; keyFormatValid: boolean; defaultFromConfigured: boolean } | null>(null);
+  const [statusLoading, setStatusLoading] = useState(false);
   useEffect(() => setDraft(settings), [settings]);
+  const refreshStatus = async () => {
+    setStatusLoading(true);
+    try {
+      const response = await fetch('/api/email/send', { method: 'GET', cache: 'no-store' });
+      const result = await response.json();
+      setServiceStatus(result);
+    } catch {
+      setServiceStatus(null);
+    } finally {
+      setStatusLoading(false);
+    }
+  };
+  useEffect(() => { void refreshStatus(); }, []);
+  const statusLabel = !serviceStatus ? 'Status unavailable' : !serviceStatus.configured ? 'API key missing' : !serviceStatus.keyFormatValid ? 'API key format invalid' : 'Server key detected';
+  const statusClass = serviceStatus?.configured && serviceStatus.keyFormatValid ? 'ready' : 'error';
   return <>
-    <PageHead eyebrow="Administration" title="Email Settings" description="Configure the default sender and edit the approved sender list used by the in-app PDF email composer." />
+    <PageHead eyebrow="Administration" title="Email Settings" description="Configure approved sender addresses in the app and verify the server-side email configuration used for PDF delivery." />
     <div className="form-card email-settings-card">
+      <div className={`email-service-status ${statusClass}`}><div><span>Email service</span><b>{statusLoading ? 'Checking...' : statusLabel}</b><p>{serviceStatus?.configured && serviceStatus.keyFormatValid ? 'A Resend key is present in Vercel. The provider validates the key and sender domain during delivery.' : 'The secure API key cannot be stored in this browser form. Correct RESEND_API_KEY in Vercel, then redeploy.'}</p></div><button className="secondary" onClick={refreshStatus} disabled={statusLoading}>Refresh Status</button></div>
       <Field label="Default From Address" value={draft.defaultFrom} onChange={(value) => setDraft((current) => ({ ...current, defaultFrom: value }))} />
       <Field label="Default Reply-To Address" value={draft.replyTo} onChange={(value) => setDraft((current) => ({ ...current, replyTo: value }))} />
       <label className="field email-address-list"><span>Approved From Addresses</span><textarea value={draft.additionalFrom.join('\n')} onChange={(event) => setDraft((current) => ({ ...current, additionalFrom: event.target.value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean) }))} placeholder="estimating@scopelogic.com\nprojects@scopelogic.com" /></label>
-      <div className="email-settings-note"><b>Email provider requirement</b><p>Each sender must belong to a domain verified with the configured email provider. Leaving From blank in the composer uses the server default address.</p></div>
+      <div className="email-settings-note"><b>Two separate controls</b><p>The approved sender list above controls what the app allows you to select. RESEND_API_KEY and domain verification control whether the email provider will actually send the message.</p></div>
       <div className="form-actions"><button className="primary" onClick={() => { save({ ...draft, defaultFrom: draft.defaultFrom.trim(), replyTo: draft.replyTo.trim(), additionalFrom: Array.from(new Set(draft.additionalFrom.map((item) => item.trim()).filter(Boolean))) }); message('Saved', 'The default sender and approved sender list were saved.'); }}>Save Email Settings</button></div>
     </div>
   </>;
@@ -858,12 +886,32 @@ function ReleaseSelectionDialog({ selection, change, close, confirm }: { selecti
 }
 
 function OfficialLogoStandard() {
+  const mappings = [
+    ['Scope Concern', 'Clarification Matrix', 'Internal issue statement or clarification need.'],
+    ['Formal RFI Question', 'Formal RFI', 'A/E-facing question. Only completed when an official RFI is required.'],
+    ['Recommended Bid Basis', 'Recommended SOW Matrix', 'Interim bid basis or recommended scope standard.'],
+    ['Contractor Checklist Scope Item', 'Contractor Response Checklist', 'Exact checklist language. Blank excludes the SLR from the checklist.'],
+    ['RFI Resolution / Official Answer', 'Clarification Matrix and RFI tracking', 'Official response received from the A/E or owner.'],
+  ];
   return <>
-    <PageHead eyebrow="ScopeLogic Brand Standard" title="Official Logo" description="This logo is the approved ScopeLogic identity for the application, PDFs, release packages, and client communications moving forward." />
-    <div className="logo-standard">
-      <section className="logo-hero"><img src="/brand/scopelogic-logo-full.png" alt="ScopeLogic official logo" /><div><b>Official full logo</b><p>Primary use: PDF cover pages, formal release packages, proposals, capability documents, and prominent client-facing brand placements.</p></div></section>
-      <div className="logo-variants"><section><img src="/brand/scopelogic-logo-mark.png" alt="ScopeLogic symbol" /><b>Symbol / App Mark</b><p>Use in the application sidebar, compact headers, icons, and document-header identification.</p></section><section><img src="/brand/scopelogic-wordmark.png" alt="ScopeLogic wordmark" /><b>Wordmark</b><p>Use in horizontal headers and locations where the full logo would be too large.</p></section></div>
-      <section className="brand-rule"><h2>Official identity statement</h2><p><b>Company:</b> ScopeLogic LLC</p><p><b>Tagline:</b> Identify. Clarify. Rectify.</p><p><b>Primary colors:</b> OD green, black, and white.</p><p>The logo artwork included in this build is the official source asset. Do not redraw, re-typeset, recolor, distort, or replace individual system symbols without an approved logo revision.</p></section>
+    <PageHead eyebrow="Administration" title="ScopeLogic Operating Standards" description="The active rules that control project records, numbering, deliverables, document releases, templates, and client communications." />
+    <div className="standards-page">
+      <section className="standard-summary"><img src="/brand/scopelogic-logo-mark.png" alt="ScopeLogic" /><div><span>Current application standard</span><h2>Identify. Clarify. Rectify.</h2><p>These standards describe how the ScopeLogic application is expected to behave. They are intended as an operating reference, not only a brand display.</p></div></section>
+      <div className="standards-grid">
+        <section className="standard-card"><span>01</span><h3>SLR numbering</h3><p>Every project starts at SLR-001. RFI and snippet numbers are generated only when applicable. Deleting a submitted record closes numbering gaps automatically.</p></section>
+        <section className="standard-card"><span>02</span><h3>Submission control</h3><p>Internal Matrix edits remain drafts until Submit Entry is selected. Only submitted records feed deliverables and generated PDFs.</p></section>
+        <section className="standard-card"><span>03</span><h3>Global SLR templates</h3><p>Saved templates carry from project to project. Templates store reusable scope logic but never retain the originating project’s SLR, RFI, snippet, or document-reference numbers.</p></section>
+        <section className="standard-card"><span>04</span><h3>Checklist inclusion</h3><p>An SLR appears on the Contractor Response Checklist only when Contractor Checklist Scope Item contains text. That text replaces the Internal Matrix Scope Item on the checklist.</p></section>
+        <section className="standard-card"><span>05</span><h3>Document control</h3><p>One uploaded document revision may be marked Current. Superseded files belong in Previous Documents. Revision identifies the issue level; Current identifies the active file.</p></section>
+        <section className="standard-card"><span>06</span><h3>Official releases</h3><p>An official GC release is one combined PDF with a cover page, project revision, version date, and only the deliverables selected for that release.</p></section>
+      </div>
+      <section className="standard-section"><div className="standard-section-head"><span>Field-to-deliverable map</span><h2>What each Internal Matrix field controls</h2></div><div className="standards-table"><div className="standards-row head"><b>Internal Matrix field</b><b>Deliverable</b><b>Purpose</b></div>{mappings.map((row) => <div className="standards-row" key={row[0]}><b>{row[0]}</b><span>{row[1]}</span><p>{row[2]}</p></div>)}</div></section>
+      <div className="standards-grid two-column">
+        <section className="standard-card wide"><span>07</span><h3>Contractor response rules</h3><p>Available responses are Included, Excluded, Included as Alternate, Clarification Required, and Not Applicable. Every response other than Included requires a written reason.</p></section>
+        <section className="standard-card wide"><span>08</span><h3>Email delivery requirements</h3><p>The approved sender list is managed in the app, but the secure RESEND_API_KEY remains a Vercel environment variable. The sender domain must also be verified with the email provider.</p></section>
+        <section className="standard-card wide"><span>09</span><h3>PDF identity</h3><p>All PDFs use the official ScopeLogic logo, OD green/black/white palette, project name, revision, version date, confidentiality footer, and page numbering.</p></section>
+        <section className="standard-card wide"><span>10</span><h3>Official logo</h3><p>The supplied ScopeLogic artwork is the approved source. Full logo: covers and formal releases. Wordmark: headers. Symbol: sidebar, icons, and compact identification.</p></section>
+      </div>
     </div>
   </>;
 }

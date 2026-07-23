@@ -1,30 +1,35 @@
-# ScopeLogic Revision 14.7
+# ScopeLogic Revision 14.8
 
-Revision 14.7 refines the existing ScopeLogic application without replacing the approved workflow.
+Revision 14.8 corrects the Internal Matrix checklist workflow, removes the global New SLR shortcut, improves email configuration diagnostics, clears transient new-entry fields after saving, and replaces the logo-only Standards page with operating standards.
 
 ## Included updates
 
-- Project Library calendar occupies the upper workspace and uses a responsive editor that does not require horizontal scrolling.
-- Projects appear below the calendar in a compact list view.
-- Dashboard current drawings are limited to a compact 3–5 drawing panel.
-- Dashboard details use Contract and Contacts tabs.
-- Customer Database and contact address book persist globally across projects.
-- Project Setup can select a saved customer.
-- Email delivery can select recipients from the global contact address book.
-- Approved sender addresses are editable in Email Settings and are passed to the server email route.
-- Internal Matrix includes a prominent Include on Contractor Response Checklist control.
-- Contractor Checklist PDF fields use compact dynamic row heights; multiline Reason fields scroll when additional text exceeds the visible field.
-- Generate All PDFs and Email All PDFs open an in-app deliverable-selection dialog.
-- Official release cover pages list only the selected deliverables and can include a release note.
-- Save actions display an in-app Saved confirmation; successful email delivery displays Sent.
+- Removed the New SLR button from the global top toolbar. New issues are created only from the Internal Matrix.
+- Replaced the separate Internal Matrix checklist checkbox with a Contractor Checklist Scope Item text field.
+- Text in Contractor Checklist Scope Item is the exact scope language shown in the editable checklist PDF.
+- Leaving Contractor Checklist Scope Item blank excludes the SLR from the checklist.
+- Existing Revision 14.7 checklist assignments migrate their prior Scope Item text into the new checklist field.
+- New SLR submissions clear the editor and open a blank provisional entry for the next SLR.
+- Calendar milestone entry text continues to clear after saving.
+- Successful email delivery closes the composer before the Sent confirmation appears.
+- Email Settings now reports whether the server has a Resend key and whether its format is plausible.
+- Invalid-key responses now provide direct Vercel/Resend correction instructions.
+- ScopeLogic Standards is now an operating-reference page covering numbering, submissions, templates, field-to-deliverable mapping, checklist rules, document control, releases, email, PDFs, and logo usage.
+
+## Email configuration correction
+
+The in-app approved sender list does not replace the provider API key. A valid `RESEND_API_KEY` must be configured in Vercel.
+
+1. Create or copy a current complete API key from the Resend dashboard.
+2. In Vercel, open Project Settings → Environment Variables.
+3. Replace `RESEND_API_KEY` in every active environment that will send email, typically Production and Preview.
+4. Confirm the From-address domain is verified with Resend.
+5. Redeploy the project.
+6. Open Email Settings and select Refresh Status.
 
 ## Deployment
 
-1. Upload all files in this package to the GitHub repository.
+1. Replace the repository files with this package.
 2. Commit to the branch connected to Vercel.
-3. Confirm the existing email environment variables remain configured.
+3. Confirm the email environment variables.
 4. Redeploy.
-
-## Email configuration
-
-The application stores the default and approved sender list locally. The email provider must still verify the sender domain. `SCOPELOGIC_ALLOWED_FROM_EMAILS` remains optional as a server-side supplemental list.

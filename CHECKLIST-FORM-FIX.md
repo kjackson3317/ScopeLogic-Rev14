@@ -1,6 +1,6 @@
 # Contractor Checklist PDF Form Standard
 
-**Current revision:** 14.7
+**Current revision:** 14.8
 
 - Response dropdowns and Reason text fields receive explicit default appearances.
 - Checklist rows use a compact 34-point minimum height rather than a fixed oversized row.

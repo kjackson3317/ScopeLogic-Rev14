@@ -17,10 +17,23 @@ const escapeHtml = (value: string) => value
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#039;');
 
+export async function GET() {
+  const apiKey = String(process.env.RESEND_API_KEY || '').trim();
+  return NextResponse.json({
+    configured: Boolean(apiKey),
+    keyFormatValid: apiKey.startsWith('re_') && apiKey.length > 10,
+    defaultFromConfigured: Boolean(String(process.env.SCOPELOGIC_DEFAULT_FROM_EMAIL || '').trim()),
+  });
+}
+
 export async function POST(request: Request) {
   try {
-    if (!process.env.RESEND_API_KEY) {
-      return NextResponse.json({ error: 'Email is not configured. Add RESEND_API_KEY in Vercel Environment Variables.' }, { status: 503 });
+    const apiKey = String(process.env.RESEND_API_KEY || '').trim();
+    if (!apiKey) {
+      return NextResponse.json({ error: 'Email is not configured. Add a valid RESEND_API_KEY in Vercel Project Settings → Environment Variables, then redeploy.' }, { status: 503 });
+    }
+    if (!apiKey.startsWith('re_') || apiKey.length <= 10) {
+      return NextResponse.json({ error: 'RESEND_API_KEY has an invalid format. Replace it with the complete secret key from the Resend dashboard, apply it to the active Vercel environment, and redeploy.' }, { status: 503 });
     }
 
     const body = await request.json();
@@ -52,7 +65,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'The selected From address is not included in the approved sender list saved in the app.' }, { status: 400 });
     }
 
-    const resend = new Resend(process.env.RESEND_API_KEY);
+    const resend = new Resend(apiKey);
     const htmlMessage = escapeHtml(message).replace(/\n/g, '<br />');
     const logo = await readFile(join(process.cwd(), 'public', 'brand', 'scopelogic-wordmark.png')).catch(() => null);
     const { data, error } = await resend.emails.send({
@@ -69,7 +82,13 @@ export async function POST(request: Request) {
       ],
     });
 
-    if (error) return NextResponse.json({ error: error.message || 'The email provider rejected the message.' }, { status: 500 });
+    if (error) {
+      const providerMessage = error.message || 'The email provider rejected the message.';
+      if (/api key is invalid|invalid api key|unauthorized/i.test(providerMessage)) {
+        return NextResponse.json({ error: 'The Resend API key configured in Vercel is invalid. Replace RESEND_API_KEY with a current complete key from Resend, confirm it is assigned to Production/Preview as needed, and redeploy the project.' }, { status: 503 });
+      }
+      return NextResponse.json({ error: providerMessage }, { status: 500 });
+    }
     return NextResponse.json({ id: data?.id });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Unexpected email-service error.' }, { status: 500 });

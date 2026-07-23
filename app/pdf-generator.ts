@@ -27,6 +27,7 @@ export type PdfIssue = {
   clarification: boolean;
   formalRfi: boolean;
   checklist: boolean;
+  checklistItem: string;
   response: string;
   responseReason: string;
 };
@@ -118,7 +119,7 @@ function configFor(kind: PdfKind): PdfConfig {
       title: 'Contractor Response Checklist',
       headers: ['SLR', 'System', 'Scope Item', 'Response', 'Reason'],
       ratios: [0.07, 0.11, 0.31, 0.19, 0.32],
-      values: (i) => [i.id, systemName(i), i.title, i.response || 'Included', i.responseReason || ''],
+      values: (i) => [i.id, systemName(i), i.checklistItem, i.response || 'Included', i.responseReason || ''],
     };
   }
   return {
@@ -133,7 +134,7 @@ function rowsFor(kind: PdfKind, issues: PdfIssue[]) {
   if (kind === 'sow') return issues.filter((i) => i.sow);
   if (kind === 'clarifications') return issues.filter((i) => i.clarification);
   if (kind === 'rfi') return issues.filter((i) => i.formalRfi);
-  if (kind === 'checklist') return issues.filter((i) => i.checklist);
+  if (kind === 'checklist') return issues.filter((i) => Boolean(i.checklistItem?.trim()));
   return issues.filter((i) => i.snippet);
 }
 
