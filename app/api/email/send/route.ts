@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { Resend } from 'resend';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createClient } from '../../../../lib/supabase/server';
 
 export const runtime = 'nodejs';
 
@@ -18,6 +19,9 @@ const escapeHtml = (value: string) => value
   .replace(/'/g, '&#039;');
 
 export async function GET() {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
   const apiKey = String(process.env.RESEND_API_KEY || '').trim();
   return NextResponse.json({
     configured: Boolean(apiKey),
@@ -28,6 +32,9 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
     const apiKey = String(process.env.RESEND_API_KEY || '').trim();
     if (!apiKey) {
       return NextResponse.json({ error: 'Email is not configured. Add a valid RESEND_API_KEY in Vercel Project Settings → Environment Variables, then redeploy.' }, { status: 503 });
@@ -88,6 +95,21 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'The Resend API key configured in Vercel is invalid. Replace RESEND_API_KEY with a current complete key from Resend, confirm it is assigned to Production/Preview as needed, and redeploy the project.' }, { status: 503 });
       }
       return NextResponse.json({ error: providerMessage }, { status: 500 });
+    }
+    try {
+      await supabase.from('email_log').insert({
+        owner_id: user.id,
+        provider_message_id: data?.id || null,
+        from_address: from,
+        to_addresses: to,
+        cc_addresses: cc,
+        subject,
+        filename,
+        status: 'sent',
+        sent_at: new Date().toISOString(),
+      });
+    } catch {
+      // Delivery succeeded; logging failure must not report the email as unsent.
     }
     return NextResponse.json({ id: data?.id });
   } catch (error) {
