@@ -254,7 +254,7 @@ async function appendDeliverable(
   const xPositions = [margin];
   widths.forEach((width) => xPositions.push(xPositions[xPositions.length - 1] + width));
 
-  let page: PDFPage;
+  let page!: PDFPage;
   let y = 0;
   const createdPages: PDFPage[] = [];
 
